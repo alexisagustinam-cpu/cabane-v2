@@ -286,10 +286,11 @@ export default function App() {
       {screen==="waiter" && (
         <div style={{flex:1,display:"flex",flexDirection:"column"}}>
           <style>{`
+            .waiter-sidebar{display:none}
             @media(min-width:768px){
               .waiter-wrap{display:grid!important;grid-template-columns:300px 1fr;min-height:calc(100vh - 56px)}
               .mobile-cart-bar{display:none!important}
-              .waiter-sidebar{height:calc(100vh - 56px);overflow-y:auto;position:sticky;top:56px}
+              .waiter-sidebar{display:flex!important;height:calc(100vh - 56px);overflow-y:auto;position:sticky;top:56px}
               .product-list-item{flex-direction:row!important}
               .mesa-chips-row{display:none!important}
             }
