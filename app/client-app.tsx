@@ -201,14 +201,14 @@ export default function App() {
       { r: "admin",   icon: "⚙️", tag: "Admin",    desc: "Acceso completo al sistema" },
     ];
     return (
-      <div style={{ minHeight:"100vh", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"24px 16px", background:"var(--dark)", position:"relative", overflow:"hidden" }}>
+      <div style={{ minHeight:"100vh", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"24px 16px", background:"#17120F", position:"relative", overflow:"hidden" }}>
         {/* Background decoration */}
         <div style={{ position:"absolute", top:-80, right:-80, width:320, height:320, background:"#E13B2D", borderRadius:"50%", opacity:0.12 }} />
         <div style={{ position:"absolute", bottom:-100, left:-60, width:280, height:280, background:"#F5B233", borderRadius:"50%", opacity:0.08 }} />
 
         <div className="fade-up" style={{ textAlign:"center", marginBottom:36 }}>
           <div style={{ fontSize:12, fontWeight:700, letterSpacing:"0.2em", color:"#F5B233", textTransform:"uppercase", marginBottom:12 }}>Sistema de pedidos</div>
-          <h1 style={{ fontFamily:"var(--font-head)", fontSize:"clamp(32px,6vw,52px)", fontWeight:800, color:"#fff", letterSpacing:"-0.03em", lineHeight:1.1 }}>
+          <h1 style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:"clamp(32px,6vw,52px)", fontWeight:800, color:"#fff", letterSpacing:"-0.03em", lineHeight:1.1 }}>
             Cabane<br />Sandwiches
           </h1>
           <p style={{ color:"rgba(255,255,255,0.45)", fontWeight:500, marginTop:10, fontSize:14 }}>Sánduches rápidos, calientes y bien armados</p>
@@ -221,7 +221,7 @@ export default function App() {
               onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(225,59,45,0.2)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#E13B2D"; }}
               onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.05)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(255,255,255,0.1)"; }}>
               <div style={{ fontSize:28, marginBottom:8 }}>{icon}</div>
-              <div style={{ fontFamily:"var(--font-head)", fontSize:16, fontWeight:800, color:"#fff", marginBottom:4 }}>{tag}</div>
+              <div style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:16, fontWeight:800, color:"#fff", marginBottom:4 }}>{tag}</div>
               <div style={{ fontSize:12, color:"rgba(255,255,255,0.5)", fontWeight:500, lineHeight:1.4 }}>{desc}</div>
             </button>
           ))}
@@ -232,12 +232,12 @@ export default function App() {
 
   // ── APP SHELL ──────────────────────────────────────────────────
   return (
-    <div style={{ minHeight:"100vh", background:"var(--cream)", display:"flex", flexDirection:"column" }}>
+    <div style={{ minHeight:"100vh", background:"#FFF4E3", display:"flex", flexDirection:"column" }}>
 
       {/* Header */}
-      <header style={{ background:"var(--dark)", padding:"10px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, zIndex:100, borderBottom:"2px solid #2A1F1A" }}>
+      <header style={{ background:"#17120F", padding:"10px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, zIndex:100, borderBottom:"2px solid #2A1F1A" }}>
         <div>
-          <div style={{ fontFamily:"var(--font-head)", fontSize:17, fontWeight:800, color:"#fff", letterSpacing:"-0.01em" }}>
+          <div style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:17, fontWeight:800, color:"#fff", letterSpacing:"-0.01em" }}>
             <span style={{ color:"#F5B233" }}>Cabane</span> Sandwiches
           </div>
         </div>
@@ -249,7 +249,7 @@ export default function App() {
 
       {/* Tab nav */}
       {screens.length > 1 && (
-        <nav style={{ background:"var(--dark2)", padding:"8px 12px", display:"flex", gap:6 }}>
+        <nav style={{ background:"#2A1F1A", padding:"8px 12px", display:"flex", gap:6 }}>
           {screens.map(s => (
             <button key={s} onClick={() => setScreen(s)}
               style={{ flex:1, padding:"10px", borderRadius:12, fontWeight:700, fontSize:13,
@@ -270,7 +270,7 @@ export default function App() {
           <div className="waiter-grid" style={{ display:"block" }}>
 
             {/* Sidebar */}
-            <aside style={{ background:"var(--dark)", padding:"20px 16px", minHeight:"100%", display:"flex", flexDirection:"column", gap:16 }}>
+            <aside style={{ background:"#17120F", padding:"20px 16px", minHeight:"100%", display:"flex", flexDirection:"column", gap:16 }}>
               <div>
                 <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.14em", color:"rgba(255,255,255,0.35)", textTransform:"uppercase", marginBottom:8 }}>Mesa activa</div>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6 }}>
@@ -295,7 +295,7 @@ export default function App() {
                         <span style={{ color:"#F5B233" }}>{fmt(i.qty*i.price)}</span>
                       </div>
                     ))}
-                    <div style={{ borderTop:"1px solid rgba(255,255,255,0.08)", paddingTop:8, marginTop:4, display:"flex", justifyContent:"space-between", fontWeight:800, color:"#fff", fontFamily:"var(--font-head)" }}>
+                    <div style={{ borderTop:"1px solid rgba(255,255,255,0.08)", paddingTop:8, marginTop:4, display:"flex", justifyContent:"space-between", fontWeight:800, color:"#fff", fontFamily:"Syne, system-ui, sans-serif" }}>
                       <span>Total</span><span style={{ color:"#F5B233" }}>{fmt(cartTotal)}</span>
                     </div>
                   </div>
@@ -305,7 +305,7 @@ export default function App() {
               {sendMsg && <div style={{ background:"rgba(47,125,50,0.2)", border:"1px solid #2F7D32", borderRadius:12, padding:"10px 14px", fontSize:13, fontWeight:700, color:"#6FCF73" }}>{sendMsg}</div>}
 
               <button disabled={cartCount===0} onClick={() => setModalOpen(true)}
-                style={{ ...btn("#E13B2D","#fff",cartCount===0), fontFamily:"var(--font-head)", fontWeight:800, fontSize:15, letterSpacing:"-0.01em" }}>
+                style={{ ...btn("#E13B2D","#fff",cartCount===0), fontFamily:"Syne, system-ui, sans-serif", fontWeight:800, fontSize:15, letterSpacing:"-0.01em" }}>
                 {cartCount > 0 ? `Enviar ${cartCount} item${cartCount>1?"s":""} · ${fmt(cartTotal)}` : "Agrega productos"}
               </button>
             </aside>
@@ -324,8 +324,8 @@ export default function App() {
                     <div key={p.id} style={{ ...card, padding:14, display:"flex", flexDirection:"column", gap:10, position:"relative", border: qty > 0 ? "2px solid #E13B2D" : "2px solid transparent" }}>
                       {qty > 0 && <div style={{ position:"absolute", top:-8, right:-8, background:"#E13B2D", color:"#fff", width:22, height:22, borderRadius:"50%", fontSize:11, fontWeight:800, display:"flex", alignItems:"center", justifyContent:"center" }}>{qty}</div>}
                       <div>
-                        <div style={{ fontSize:14, fontWeight:700, color:"var(--dark)", lineHeight:1.3, marginBottom:4 }}>{p.name}</div>
-                        <div style={{ fontFamily:"var(--font-head)", fontSize:16, fontWeight:800, color:"#E13B2D" }}>{fmt(p.price)}</div>
+                        <div style={{ fontSize:14, fontWeight:700, color:"#17120F", lineHeight:1.3, marginBottom:4 }}>{p.name}</div>
+                        <div style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:16, fontWeight:800, color:"#E13B2D" }}>{fmt(p.price)}</div>
                       </div>
                       <div style={{ display:"flex", gap:6, marginTop:"auto" }}>
                         {qty > 0 && <button onClick={() => changeQty(p.id,-1)} style={{ ...btn("#F5E6CC","#17120F"), flex:1, minHeight:44, padding:"10px", fontSize:18, fontWeight:800 }}>−</button>}
@@ -342,13 +342,13 @@ export default function App() {
 
           {/* Mobile cart bar */}
           <style>{`@media(min-width:768px){ .mobile-cart{ display:none !important; } }`}</style>
-          <div className="mobile-cart" style={{ position:"fixed", bottom:0, left:0, right:0, background:"var(--dark)", padding:"12px 16px 20px", display:"flex", justifyContent:"space-between", alignItems:"center", zIndex:50, borderTop:"1px solid rgba(255,255,255,0.08)", boxShadow:"0 -8px 24px rgba(0,0,0,0.3)" }}>
+          <div className="mobile-cart" style={{ position:"fixed", bottom:0, left:0, right:0, background:"#17120F", padding:"12px 16px 20px", display:"flex", justifyContent:"space-between", alignItems:"center", zIndex:50, borderTop:"1px solid rgba(255,255,255,0.08)", boxShadow:"0 -8px 24px rgba(0,0,0,0.3)" }}>
             <div>
               <div style={{ fontSize:12, color:"rgba(255,255,255,0.4)", fontWeight:600 }}>{cartCount} productos · {mesa}</div>
-              <div style={{ fontFamily:"var(--font-head)", fontSize:22, fontWeight:800, color:"#fff" }}>{fmt(cartTotal)}</div>
+              <div style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:22, fontWeight:800, color:"#fff" }}>{fmt(cartTotal)}</div>
             </div>
             <button disabled={cartCount===0} onClick={() => setModalOpen(true)}
-              style={{ ...btn("#E13B2D","#fff",cartCount===0), fontFamily:"var(--font-head)", minWidth:140 }}>
+              style={{ ...btn("#E13B2D","#fff",cartCount===0), fontFamily:"Syne, system-ui, sans-serif", minWidth:140 }}>
               Ver pedido
             </button>
           </div>
@@ -360,8 +360,8 @@ export default function App() {
         <div style={{ padding:"16px", maxWidth:1100, margin:"0 auto", width:"100%" }}>
           <div style={{ display:"flex", alignItems:"flex-end", justifyContent:"space-between", marginBottom:16, flexWrap:"wrap", gap:10 }}>
             <div>
-              <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.14em", color:"var(--muted)", textTransform:"uppercase" }}>Pantalla de</div>
-              <h1 style={{ fontFamily:"var(--font-head)", fontSize:"clamp(28px,4vw,40px)", fontWeight:800, letterSpacing:"-0.03em" }}>Cocina</h1>
+              <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.14em", color:"#7A6355", textTransform:"uppercase" }}>Pantalla de</div>
+              <h1 style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:"clamp(28px,4vw,40px)", fontWeight:800, letterSpacing:"-0.03em" }}>Cocina</h1>
             </div>
             <button onClick={loadKitchen} style={{ ...btn("#F5E6CC","#17120F"), minHeight:44, padding:"10px 18px", fontSize:13 }}>
               {kitchenLoading ? "Cargando…" : "↻ Actualizar"}
@@ -376,7 +376,7 @@ export default function App() {
               { label:"Listos", count:kitchenOrders.filter(o=>o.status==="listo").length, bg:"#2F7D32", fg:"#fff" },
             ].map(({ label, count, bg, fg }) => (
               <div key={label} style={{ background:bg, borderRadius:16, padding:"14px 10px", textAlign:"center", boxShadow:`0 2px 0 ${bg}88` }}>
-                <div style={{ fontFamily:"var(--font-head)", fontSize:32, fontWeight:800, color:fg, lineHeight:1 }}>{count}</div>
+                <div style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:32, fontWeight:800, color:fg, lineHeight:1 }}>{count}</div>
                 <div style={{ fontSize:11, fontWeight:700, color:fg, opacity:0.75, textTransform:"uppercase", letterSpacing:"0.1em", marginTop:4 }}>{label}</div>
               </div>
             ))}
@@ -386,8 +386,8 @@ export default function App() {
           {kitchenOrders.length === 0 && !kitchenLoading ? (
             <div style={{ textAlign:"center", padding:"60px 20px" }}>
               <div style={{ fontSize:48, marginBottom:12 }}>🧑‍🍳</div>
-              <div style={{ fontFamily:"var(--font-head)", fontSize:22, fontWeight:800, color:"var(--muted)" }}>Sin pedidos activos</div>
-              <div style={{ fontSize:14, color:"var(--muted)", marginTop:6 }}>Los nuevos pedidos aparecerán aquí</div>
+              <div style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:22, fontWeight:800, color:"#7A6355" }}>Sin pedidos activos</div>
+              <div style={{ fontSize:14, color:"#7A6355", marginTop:6 }}>Los nuevos pedidos aparecerán aquí</div>
             </div>
           ) : (
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))", gap:12 }}>
@@ -400,22 +400,22 @@ export default function App() {
                   <div key={o.id} style={{ ...card, padding:16, border: o.status==="enviado"?"2px solid #E13B2D":o.status==="listo"?"2px solid #2F7D32":"2px solid var(--border)" }}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
                       <div>
-                        <div style={{ fontSize:12, fontWeight:700, color:"var(--muted)", marginBottom:2 }}>#{o.order_number} · {time}</div>
-                        <div style={{ fontFamily:"var(--font-head)", fontSize:22, fontWeight:800 }}>{o.table_label}</div>
+                        <div style={{ fontSize:12, fontWeight:700, color:"#7A6355", marginBottom:2 }}>#{o.order_number} · {time}</div>
+                        <div style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:22, fontWeight:800 }}>{o.table_label}</div>
                       </div>
                       <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Preparando":"Listo"}</span>
                     </div>
                     <div style={{ display:"flex", flexDirection:"column", gap:6, marginBottom:12 }}>
                       {(o.order_items||[]).map(i => (
-                        <div key={i.id} style={{ display:"flex", justifyContent:"space-between", background:"var(--cream)", borderRadius:10, padding:"8px 12px", fontSize:14, fontWeight:600 }}>
+                        <div key={i.id} style={{ display:"flex", justifyContent:"space-between", background:"#FFF4E3", borderRadius:10, padding:"8px 12px", fontSize:14, fontWeight:600 }}>
                           <span>{i.quantity}× {i.product_name}</span>
                           <span style={{ fontWeight:700 }}>{fmt(i.quantity*i.unit_price)}</span>
                         </div>
                       ))}
                     </div>
-                    <div style={{ background:"var(--dark)", borderRadius:12, padding:"10px 14px", display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+                    <div style={{ background:"#17120F", borderRadius:12, padding:"10px 14px", display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
                       <span style={{ fontSize:13, color:"rgba(255,255,255,0.5)", fontWeight:600 }}>Total</span>
-                      <span style={{ fontFamily:"var(--font-head)", fontSize:18, fontWeight:800, color:"#F5B233" }}>{fmt(o.total)}</span>
+                      <span style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:18, fontWeight:800, color:"#F5B233" }}>{fmt(o.total)}</span>
                     </div>
                     <div style={{ display:"flex", gap:8 }}>
                       {nextLabel && (
@@ -444,8 +444,8 @@ export default function App() {
         <div style={{ padding:"16px", maxWidth:900, margin:"0 auto", width:"100%" }}>
           <div style={{ display:"flex", alignItems:"flex-end", justifyContent:"space-between", marginBottom:16, flexWrap:"wrap", gap:10 }}>
             <div>
-              <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.14em", color:"var(--muted)", textTransform:"uppercase" }}>Módulo de</div>
-              <h1 style={{ fontFamily:"var(--font-head)", fontSize:"clamp(28px,4vw,40px)", fontWeight:800, letterSpacing:"-0.03em" }}>Caja</h1>
+              <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.14em", color:"#7A6355", textTransform:"uppercase" }}>Módulo de</div>
+              <h1 style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:"clamp(28px,4vw,40px)", fontWeight:800, letterSpacing:"-0.03em" }}>Caja</h1>
             </div>
             <button onClick={loadCashier} style={{ ...btn("#F5E6CC","#17120F"), minHeight:44, padding:"10px 18px", fontSize:13 }}>
               {cashierLoading ? "Cargando…" : "↻ Actualizar"}
@@ -466,7 +466,7 @@ export default function App() {
               <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:8, marginBottom:20 }}>
                 {metrics.map(({ v, l, bg, fg, accent }) => (
                   <div key={l} style={{ background:bg, borderRadius:16, padding:"14px 16px", boxShadow:`0 2px 0 ${bg}99` }}>
-                    <div style={{ fontFamily:"var(--font-head)", fontSize:"clamp(20px,4vw,28px)", fontWeight:800, color:accent, lineHeight:1 }}>{v}</div>
+                    <div style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:"clamp(20px,4vw,28px)", fontWeight:800, color:accent, lineHeight:1 }}>{v}</div>
                     <div style={{ fontSize:11, fontWeight:700, color:fg, opacity:0.6, textTransform:"uppercase", letterSpacing:"0.1em", marginTop:4 }}>{l}</div>
                   </div>
                 ))}
@@ -478,7 +478,7 @@ export default function App() {
           {cashierOrders.filter(o=>o.status!=="pagado").length === 0 && !cashierLoading ? (
             <div style={{ textAlign:"center", padding:"60px 20px" }}>
               <div style={{ fontSize:48, marginBottom:12 }}>✅</div>
-              <div style={{ fontFamily:"var(--font-head)", fontSize:22, fontWeight:800, color:"var(--muted)" }}>Sin pedidos pendientes</div>
+              <div style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:22, fontWeight:800, color:"#7A6355" }}>Sin pedidos pendientes</div>
             </div>
           ) : (
             <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
@@ -490,13 +490,13 @@ export default function App() {
                   <div key={o.id} style={{ ...card, padding:16, border: canPay?"2px solid #2F7D32":"2px solid var(--border)" }}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:14 }}>
                       <div>
-                        <div style={{ fontSize:12, fontWeight:700, color:"var(--muted)", marginBottom:2 }}>#{o.order_number} · {time}</div>
-                        <div style={{ fontFamily:"var(--font-head)", fontSize:22, fontWeight:800 }}>{o.table_label}</div>
+                        <div style={{ fontSize:12, fontWeight:700, color:"#7A6355", marginBottom:2 }}>#{o.order_number} · {time}</div>
+                        <div style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:22, fontWeight:800 }}>{o.table_label}</div>
                         <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Preparando":"Listo para cobrar"}</span>
                       </div>
-                      <div style={{ fontFamily:"var(--font-head)", fontSize:"clamp(24px,3vw,30px)", fontWeight:800, color:"#E13B2D" }}>{fmt(o.total)}</div>
+                      <div style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:"clamp(24px,3vw,30px)", fontWeight:800, color:"#E13B2D" }}>{fmt(o.total)}</div>
                     </div>
-                    {!canPay && <p style={{ fontSize:13, color:"var(--muted)", fontWeight:600, marginBottom:12, background:"var(--cream2)", borderRadius:10, padding:"8px 12px" }}>⏳ Esperando que cocina marque como Listo</p>}
+                    {!canPay && <p style={{ fontSize:13, color:"#7A6355", fontWeight:600, marginBottom:12, background:"#F5E6CC", borderRadius:10, padding:"8px 12px" }}>⏳ Esperando que cocina marque como Listo</p>}
                     <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
                       {(["efectivo","tarjeta","transferencia"] as const).map(m => {
                         const labels = { efectivo:"💵 Efectivo", tarjeta:"💳 Tarjeta", transferencia:"📱 Transferencia" };
@@ -525,26 +525,26 @@ export default function App() {
           <div style={{ ...card, padding:20, width:"100%", maxWidth:480, maxHeight:"90vh", overflowY:"auto", animation:"slideIn 0.3s ease" }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:16 }}>
               <div>
-                <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.14em", color:"var(--muted)", textTransform:"uppercase", marginBottom:4 }}>Confirmar pedido</div>
-                <div style={{ fontFamily:"var(--font-head)", fontSize:24, fontWeight:800 }}>{mesa}</div>
+                <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.14em", color:"#7A6355", textTransform:"uppercase", marginBottom:4 }}>Confirmar pedido</div>
+                <div style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:24, fontWeight:800 }}>{mesa}</div>
               </div>
-              <button onClick={() => setModalOpen(false)} style={{ width:40, height:40, borderRadius:99, background:"var(--cream2)", fontSize:18, fontWeight:800, color:"var(--dark)", border:"none", display:"flex", alignItems:"center", justifyContent:"center" }}>×</button>
+              <button onClick={() => setModalOpen(false)} style={{ width:40, height:40, borderRadius:99, background:"#F5E6CC", fontSize:18, fontWeight:800, color:"#17120F", border:"none", display:"flex", alignItems:"center", justifyContent:"center" }}>×</button>
             </div>
             <div style={{ display:"flex", flexDirection:"column", gap:6, marginBottom:14 }}>
               {cartItems.map(i => (
-                <div key={i.id} style={{ display:"flex", justifyContent:"space-between", background:"var(--cream)", borderRadius:12, padding:"10px 14px", fontWeight:700 }}>
+                <div key={i.id} style={{ display:"flex", justifyContent:"space-between", background:"#FFF4E3", borderRadius:12, padding:"10px 14px", fontWeight:700 }}>
                   <span>{i.qty}× {i.name}</span>
                   <span style={{ color:"#E13B2D" }}>{fmt(i.qty*i.price)}</span>
                 </div>
               ))}
             </div>
-            <div style={{ background:"var(--dark)", borderRadius:14, padding:"14px 16px", display:"flex", justifyContent:"space-between", marginBottom:16 }}>
+            <div style={{ background:"#17120F", borderRadius:14, padding:"14px 16px", display:"flex", justifyContent:"space-between", marginBottom:16 }}>
               <span style={{ color:"rgba(255,255,255,0.5)", fontWeight:600 }}>Total a cobrar</span>
-              <span style={{ fontFamily:"var(--font-head)", fontSize:22, fontWeight:800, color:"#F5B233" }}>{fmt(cartTotal)}</span>
+              <span style={{ fontFamily:"Syne, system-ui, sans-serif", fontSize:22, fontWeight:800, color:"#F5B233" }}>{fmt(cartTotal)}</span>
             </div>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1.6fr", gap:10 }}>
               <button onClick={() => setModalOpen(false)} style={{ ...btn("#F5E6CC","#17120F"), fontWeight:700 }}>Editar</button>
-              <button disabled={sending} onClick={sendToKitchen} style={{ ...btn("#E13B2D","#fff",sending), fontFamily:"var(--font-head)", fontWeight:800, fontSize:15 }}>
+              <button disabled={sending} onClick={sendToKitchen} style={{ ...btn("#E13B2D","#fff",sending), fontFamily:"Syne, system-ui, sans-serif", fontWeight:800, fontSize:15 }}>
                 {sending ? "Enviando…" : "🚀 Enviar a cocina"}
               </button>
             </div>
