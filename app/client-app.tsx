@@ -32,7 +32,7 @@ const SCREEN_LABEL: Record<string, string> = { waiter:"Mesero", kitchen:"Cocina"
 
 // ── Colors ────────────────────────────────────────────────────────
 const C = { red:"#E13B2D", dark:"#17120F", dark2:"#2A1F1A", cream:"#FFF4E3", cream2:"#F5E6CC", gold:"#F5B233", green:"#2F7D32", muted:"#7A6355", border:"#E8D8C4" };
-const HEAD = "Syne, system-ui, sans-serif";
+const HEAD = "'Plus Jakarta Sans', system-ui, sans-serif";
 
 export default function App() {
   const [hydrated, setHydrated] = useState(false);
