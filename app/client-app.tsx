@@ -14,7 +14,7 @@ type Role = "waiter" | "kitchen" | "cashier" | "admin";
 type Status = "enviado" | "preparando" | "listo" | "pagado";
 interface Profile { id: string; name: string; role: Role }
 interface Product { id: string; name: string; category: string; price: number }
-interface OrderItem { id: string; product_name: string; quantity: number; unit_price: number }
+interface OrderItem { id: string; product_name: string; quantity: number; unit_price: number; notes?: string }
 interface Order { id: string; order_number: number; table_label: string; status: Status; total: number; created_at: string; order_items?: OrderItem[] }
 interface CartItem extends Product { qty: number; notes: string[]; customNote: string }
 
@@ -65,6 +65,7 @@ export default function App() {
   const [cOrders, setCOrders] = useState<Order[]>([]);
   const [cLoading, setCLoading] = useState(false);
   const [paying, setPaying] = useState<string|null>(null);
+  const [expandedOrder, setExpandedOrder] = useState<string|null>(null);
   const styleRef = useRef(false);
 
   useEffect(() => {
@@ -561,9 +562,16 @@ export default function App() {
                     </div>
                     <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
                       {(o.order_items||[]).map(i=>(
-                        <div key={i.id} style={{display:"flex",justifyContent:"space-between",background:CREAM,borderRadius:8,padding:"8px 12px",fontSize:14,fontWeight:600,color:DARK}}>
-                          <span>{i.quantity}× {i.product_name}</span>
-                          <span style={{fontWeight:800}}>{$(i.quantity*i.unit_price)}</span>
+                        <div key={i.id} style={{background:CREAM,borderRadius:8,padding:"8px 12px"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",fontSize:14,fontWeight:700,color:DARK}}>
+                            <span>{i.quantity}× {i.product_name}</span>
+                            <span style={{fontWeight:800}}>{$(i.quantity*i.unit_price)}</span>
+                          </div>
+                          {i.notes && (
+                            <p style={{fontSize:12,fontWeight:700,color:RED,marginTop:4,display:"flex",alignItems:"center",gap:4}}>
+                              <span>📝</span> {i.notes}
+                            </p>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -636,8 +644,30 @@ export default function App() {
                         <p style={{fontSize:22,fontWeight:900,color:DARK,marginBottom:6}}>{o.table_label}</p>
                         <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Preparando":"Listo para cobrar"}</span>
                       </div>
-                      <p style={{fontSize:"clamp(22px,3vw,28px)",fontWeight:900,color:RED}}>{$(o.total)}</p>
+                      <div style={{display:"flex",flexDirection:"column" as const,alignItems:"flex-end",gap:8}}>
+                        <p style={{fontSize:"clamp(22px,3vw,28px)",fontWeight:900,color:RED}}>{$(o.total)}</p>
+                        <button onClick={()=>setExpandedOrder(expandedOrder===o.id?null:o.id)}
+                          style={{fontSize:12,fontWeight:700,color:MUTED,background:CREAM2,border:"none",borderRadius:8,padding:"5px 10px",cursor:"pointer",fontFamily:FONT}}>
+                          {expandedOrder===o.id?"Ocultar ▲":`Ver ${(o.order_items||[]).length} items ▼`}
+                        </button>
+                      </div>
                     </div>
+
+                    {/* Order items expandable */}
+                    {expandedOrder===o.id && (
+                      <div style={{background:CREAM,borderRadius:10,padding:"10px 12px",marginBottom:12,display:"flex",flexDirection:"column" as const,gap:6}}>
+                        {(o.order_items||[]).map(i=>(
+                          <div key={i.id} style={{borderBottom:`1px solid ${BORDER}`,paddingBottom:6,marginBottom:2}}>
+                            <div style={{display:"flex",justifyContent:"space-between",fontSize:14,fontWeight:700,color:DARK}}>
+                              <span>{i.quantity}× {i.product_name}</span>
+                              <span>{$(i.quantity*i.unit_price)}</span>
+                            </div>
+                            {i.notes && <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:2}}>📝 {i.notes}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
                     {!canPay && <p style={{fontSize:13,color:MUTED,fontWeight:600,marginBottom:12,background:CREAM2,borderRadius:8,padding:"8px 12px"}}>⏳ Esperando que cocina marque como Listo</p>}
                     <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
                       {(["efectivo","tarjeta","transferencia"] as const).map(m=>{
