@@ -298,7 +298,7 @@ export default function App() {
           <div className="waiter-wrap" style={{display:"block",flex:1}}>
             
             {/* Sidebar */}
-            <aside className="waiter-sidebar" style={{background:DARK,padding:20,display:"flex",flexDirection:"column",gap:16}}>
+            <aside className="waiter-sidebar" style={{background:DARK,padding:20,flexDirection:"column",gap:16}}>
               <div>
                 <p style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,0.35)",textTransform:"uppercase" as const,letterSpacing:"0.12em",marginBottom:10}}>Seleccionar mesa</p>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
