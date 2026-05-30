@@ -291,6 +291,7 @@ export default function App() {
               .mobile-cart-bar{display:none!important}
               .waiter-sidebar{height:calc(100vh - 56px);overflow-y:auto;position:sticky;top:56px}
               .product-list-item{flex-direction:row!important}
+              .mesa-chips-row{display:none!important}
             }
           `}</style>
           <div className="waiter-wrap" style={{display:"block",flex:1}}>
@@ -353,8 +354,8 @@ export default function App() {
             <main style={{paddingBottom:100}}>
               {/* Sticky category chips */}
               <div style={{position:"sticky" as const,top:0,zIndex:10,background:CREAM,borderBottom:`1px solid ${BORDER}`,padding:"10px 16px"}}>
-                {/* Mesa selector — compact */}
-                <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,scrollbarWidth:"none" as const}}>
+                {/* Mesa selector — solo en móvil (desktop lo muestra el sidebar) */}
+                <div className="mesa-chips-row" style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,scrollbarWidth:"none" as const}}>
                   {MESAS.map(m=>(
                     <button key={m} onClick={()=>setMesa(m)} style={{
                       padding:"8px 14px",borderRadius:99,fontSize:13,fontWeight:700,whiteSpace:"nowrap" as const,
