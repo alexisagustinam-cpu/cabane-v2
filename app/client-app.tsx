@@ -290,6 +290,7 @@ export default function App() {
               .waiter-wrap{display:grid!important;grid-template-columns:300px 1fr;min-height:calc(100vh - 56px)}
               .mobile-cart-bar{display:none!important}
               .waiter-sidebar{height:calc(100vh - 56px);overflow-y:auto;position:sticky;top:56px}
+              .product-list-item{flex-direction:row!important}
             }
           `}</style>
           <div className="waiter-wrap" style={{display:"block",flex:1}}>
@@ -348,44 +349,87 @@ export default function App() {
               </button>
             </aside>
 
-            {/* Products area */}
-            <main style={{padding:16,paddingBottom:90}}>
-              {/* Category chips */}
-              <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:12,marginBottom:16,scrollbarWidth:"none" as const}}>
-                {cats.map(c=>(
-                  <button key={c} onClick={()=>setCat(c)} style={{padding:"10px 18px",borderRadius:99,fontWeight:700,fontSize:14,whiteSpace:"nowrap" as const,border:"none",cursor:"pointer",fontFamily:FONT,
-                    background:cat===c?RED:CREAM2,color:cat===c?"#fff":DARK,
-                    boxShadow:cat===c?`0 4px 12px rgba(225,59,45,0.3)`:"none"}}>
-                    {c}
-                  </button>
-                ))}
+            {/* Products area — mobile-first vertical list */}
+            <main style={{paddingBottom:100}}>
+              {/* Sticky category chips */}
+              <div style={{position:"sticky" as const,top:0,zIndex:10,background:CREAM,borderBottom:`1px solid ${BORDER}`,padding:"10px 16px"}}>
+                {/* Mesa selector — compact */}
+                <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,scrollbarWidth:"none" as const}}>
+                  {MESAS.map(m=>(
+                    <button key={m} onClick={()=>setMesa(m)} style={{
+                      padding:"8px 14px",borderRadius:99,fontSize:13,fontWeight:700,whiteSpace:"nowrap" as const,
+                      border:"none",cursor:"pointer",fontFamily:FONT,flexShrink:0,
+                      background:mesa===m?DARK:"rgba(23,18,15,0.07)",
+                      color:mesa===m?"#fff":MUTED}}>
+                      {m}
+                    </button>
+                  ))}
+                </div>
+                {/* Category chips */}
+                <div style={{display:"flex",gap:8,overflowX:"auto",scrollbarWidth:"none" as const,paddingTop:2}}>
+                  {cats.map(c=>(
+                    <button key={c} onClick={()=>setCat(c)} style={{
+                      padding:"10px 20px",borderRadius:99,fontWeight:700,fontSize:14,
+                      whiteSpace:"nowrap" as const,border:"none",cursor:"pointer",fontFamily:FONT,flexShrink:0,
+                      background:cat===c?RED:CREAM2,color:cat===c?"#fff":DARK,
+                      boxShadow:cat===c?`0 4px 12px rgba(225,59,45,0.25)`:"none"}}>
+                      {c}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              {/* Product grid */}
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:12}}>
+              {/* Success message */}
+              {sentMsg && (
+                <div style={{margin:"12px 16px 0",background:"rgba(47,125,50,0.1)",border:`1.5px solid ${GREEN}`,borderRadius:12,padding:"12px 16px",fontSize:14,fontWeight:700,color:GREEN}}>
+                  {sentMsg}
+                </div>
+              )}
+
+              {/* Product list — vertical, one per row, big touch targets */}
+              <div style={{padding:"12px 12px 0",display:"flex",flexDirection:"column",gap:8}}>
                 {visProd.map(p=>{
                   const qty=cart[p.id]?.qty||0;
                   return (
-                    <div key={p.id} style={{...card,padding:16,display:"flex",flexDirection:"column",gap:12,position:"relative" as const,
+                    <div key={p.id} className="product-list-item" style={{
+                      background:qty>0?"#fff":"#fff",
+                      borderRadius:16,
                       border:qty>0?`2px solid ${RED}`:`1px solid ${BORDER}`,
-                      transform:qty>0?"translateY(-2px)":"none",
-                      boxShadow:qty>0?`0 8px 24px rgba(225,59,45,0.15)`:card.boxShadow}}>
-                      {qty>0 && (
-                        <div style={{position:"absolute" as const,top:-10,right:-10,background:RED,color:"#fff",width:24,height:24,borderRadius:"50%",fontSize:12,fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:`0 2px 8px rgba(225,59,45,0.5)`}}>
-                          {qty}
+                      padding:"14px 14px",
+                      display:"flex",
+                      flexDirection:"column" as const,
+                      gap:10,
+                      boxShadow:qty>0?`0 4px 20px rgba(225,59,45,0.12)`:`0 1px 4px rgba(0,0,0,0.06)`,
+                      transition:"all .15s"}}>
+
+                      {/* Top row: name + price + add button */}
+                      <div style={{display:"flex",alignItems:"center",gap:12}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <p style={{fontSize:17,fontWeight:800,color:DARK,lineHeight:1.2,marginBottom:3}}>{p.name}</p>
+                          <p style={{fontSize:20,fontWeight:900,color:RED,lineHeight:1}}>{$(p.price)}</p>
                         </div>
-                      )}
-                      <div>
-                        <p style={{fontSize:15,fontWeight:800,color:DARK,lineHeight:1.3,marginBottom:6}}>{p.name}</p>
-                        <p style={{fontSize:18,fontWeight:900,color:RED}}>{$(p.price)}</p>
-                      </div>
-                      <div style={{display:"flex",gap:6,marginTop:"auto"}}>
-                        {qty>0 && (
-                          <button onClick={()=>changeQty(p.id,-1)} style={{...btn(CREAM2,DARK),flex:1,minHeight:48,padding:"0",fontSize:20,fontWeight:900}}>−</button>
-                        )}
-                        <button onClick={()=>changeQty(p.id,1)} style={{...btn(DARK,"#fff"),flex:qty>0?1:undefined,minHeight:48,padding:"0",fontSize:qty>0?18:24,fontWeight:900,width:qty>0?undefined:"100%"}}>
-                          {qty>0?qty:"+"}
-                        </button>
+
+                        {/* Controls */}
+                        <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                          {qty>0 && (
+                            <>
+                              <button onClick={()=>changeQty(p.id,-1)} style={{
+                                width:52,height:52,borderRadius:14,fontSize:24,fontWeight:900,
+                                background:CREAM2,color:DARK,border:"none",cursor:"pointer",fontFamily:FONT,
+                                display:"flex",alignItems:"center",justifyContent:"center"}}>
+                                −
+                              </button>
+                              <span style={{fontSize:20,fontWeight:900,color:DARK,minWidth:28,textAlign:"center" as const}}>{qty}</span>
+                            </>
+                          )}
+                          <button onClick={()=>changeQty(p.id,1)} style={{
+                            width:62,height:62,borderRadius:16,fontSize:28,fontWeight:900,
+                            background:qty>0?RED:DARK,color:"#fff",border:"none",cursor:"pointer",fontFamily:FONT,
+                            display:"flex",alignItems:"center",justifyContent:"center",
+                            boxShadow:qty>0?`0 4px 14px rgba(225,59,45,0.4)`:`0 4px 14px rgba(23,18,15,0.2)`}}>
+                            {qty>0?"+":"＋"}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -395,13 +439,18 @@ export default function App() {
           </div>
 
           {/* Mobile cart bar */}
-          <div className="mobile-cart-bar" style={{position:"fixed" as const,bottom:0,left:0,right:0,background:DARK,padding:"12px 16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",zIndex:50,boxShadow:"0 -4px 20px rgba(23,18,15,0.25)"}}>
-            <div>
-              <p style={{fontSize:12,color:"rgba(255,255,255,0.45)",fontWeight:600}}>{cartCount} prod. · {mesa}</p>
-              <p style={{fontSize:22,fontWeight:900,color:"#fff"}}>{$(cartTotal)}</p>
+          <div className="mobile-cart-bar" style={{position:"fixed" as const,bottom:0,left:0,right:0,background:DARK,padding:"12px 16px 24px",display:"flex",alignItems:"center",gap:12,zIndex:50,boxShadow:"0 -8px 32px rgba(23,18,15,0.35)"}}>
+            <div style={{flex:1}}>
+              <p style={{fontSize:12,color:"rgba(255,255,255,0.4)",fontWeight:600,marginBottom:2}}>{cartCount===0?"Sin productos":cartCount===1?"1 producto":`${cartCount} productos`} · {mesa}</p>
+              <p style={{fontSize:26,fontWeight:900,color: cartCount>0?"#fff":"rgba(255,255,255,0.3)",lineHeight:1}}>{$(cartTotal)}</p>
             </div>
-            <button disabled={cartCount===0} onClick={()=>setModal(true)} style={{...btn(RED,"#fff",cartCount===0),minWidth:130,height:50}}>
-              Ver pedido
+            <button disabled={cartCount===0} onClick={()=>setModal(true)} style={{
+              height:58,padding:"0 24px",borderRadius:16,fontSize:16,fontWeight:800,fontFamily:FONT,
+              background:cartCount>0?RED:"rgba(255,255,255,0.1)",color:cartCount>0?"#fff":"rgba(255,255,255,0.3)",
+              border:"none",cursor:cartCount>0?"pointer":"not-allowed",
+              boxShadow:cartCount>0?`0 4px 20px rgba(225,59,45,0.5)`:"none",
+              minWidth:150}}>
+              {cartCount>0?"Revisar pedido →":"Agrega algo"}
             </button>
           </div>
         </div>
