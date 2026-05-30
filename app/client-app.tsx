@@ -16,10 +16,12 @@ interface Profile { id: string; name: string; role: Role }
 interface Product { id: string; name: string; category: string; price: number }
 interface OrderItem { id: string; product_name: string; quantity: number; unit_price: number }
 interface Order { id: string; order_number: number; table_label: string; status: Status; total: number; created_at: string; order_items?: OrderItem[] }
-interface CartItem extends Product { qty: number }
+interface CartItem extends Product { qty: number; notes: string[]; customNote: string }
 
 const $ = (n: number) => `$${n.toFixed(2)}`;
 const MESAS = ["Mesa 1","Mesa 2","Mesa 3","Mesa 4","Para llevar","Delivery"];
+const CAT_ORDER = ["Sánduches","Combos","Bebidas","Extras"];
+const QUICK_NOTES = ["Sin cebolla","Sin salsa","Extra queso","Bien tostado","Sin pepinillo","Sin mayonesa","Término medio","Bien cocido","Para llevar","Sin picante"];
 const ROLE_SCREENS: Record<Role, string[]> = { waiter:["waiter"], kitchen:["kitchen"], cashier:["cashier"], admin:["waiter","kitchen","cashier"] };
 const SL: Record<string,string> = { waiter:"Mesero", kitchen:"Cocina", cashier:"Caja" };
 
@@ -137,11 +139,23 @@ export default function App() {
   function changeQty(id: string, delta: number) {
     setCart(prev => {
       const p = products.find(x=>x.id===id)!;
-      const cur = prev[id]||{...p,qty:0};
+      const cur = prev[id]||{...p,qty:0,notes:[],customNote:""};
       const qty = Math.max(0, cur.qty+delta);
       if (!qty) { const n={...prev}; delete n[id]; return n; }
       return {...prev,[id]:{...cur,qty}};
     });
+  }
+
+  function toggleNote(id: string, note: string) {
+    setCart(prev => {
+      const cur = prev[id]; if (!cur) return prev;
+      const notes = cur.notes.includes(note) ? cur.notes.filter(n=>n!==note) : [...cur.notes, note];
+      return {...prev,[id]:{...cur,notes}};
+    });
+  }
+
+  function setCustomNote(id: string, customNote: string) {
+    setCart(prev => { const cur=prev[id]; if(!cur) return prev; return {...prev,[id]:{...cur,customNote}}; });
   }
 
   async function sendToKitchen() {
@@ -151,7 +165,11 @@ export default function App() {
     setSending(true);
     const { data: order, error }: { data: Order|null; error: unknown } = await getDB().from("orders").insert({table_label:mesa,status:"enviado",total}).select().single();
     if (error||!order) { setSending(false); return; }
-    await getDB().from("order_items").insert(items.map(i=>({order_id:order.id,product_id:i.id,product_name:i.name,quantity:i.qty,unit_price:i.price})));
+    await getDB().from("order_items").insert(items.map(i=>({
+      order_id:order.id, product_id:i.id, product_name:i.name,
+      quantity:i.qty, unit_price:i.price,
+      notes:[...i.notes, i.customNote].filter(Boolean).join(", ")||null
+    })));
     setCart({}); setModal(false);
     setSentMsg(`✓ Pedido #${order.order_number} enviado a cocina`);
     setTimeout(()=>setSentMsg(""),3500);
@@ -178,7 +196,10 @@ export default function App() {
   const cartItems = Object.values(cart);
   const cartTotal = cartItems.reduce((s,i)=>s+i.price*i.qty,0);
   const cartCount = cartItems.reduce((s,i)=>s+i.qty,0);
-  const cats = [...new Set(products.map(p=>p.category))];
+  const cats = [...new Set(products.map(p=>p.category))].sort((a,b)=>{
+    const ai = CAT_ORDER.indexOf(a); const bi = CAT_ORDER.indexOf(b);
+    return (ai===-1?99:ai) - (bi===-1?99:bi);
+  });
   const visProd = products.filter(p=>p.category===cat);
   const screens = profile ? ROLE_SCREENS[profile.role] : [];
 
@@ -433,6 +454,36 @@ export default function App() {
                           </button>
                         </div>
                       </div>
+
+                      {/* Notes — only when product is in cart */}
+                      {qty>0 && (
+                        <div style={{borderTop:`1px solid ${BORDER}`,paddingTop:10}}>
+                          {/* Quick note chips */}
+                          <div style={{display:"flex",gap:6,flexWrap:"wrap" as const,marginBottom:8}}>
+                            {QUICK_NOTES.map(n=>{
+                              const active = cart[p.id]?.notes.includes(n);
+                              return (
+                                <button key={n} onClick={()=>toggleNote(p.id,n)} style={{
+                                  padding:"6px 12px",borderRadius:99,fontSize:12,fontWeight:700,fontFamily:FONT,
+                                  border:`1.5px solid ${active?RED:BORDER}`,cursor:"pointer",
+                                  background:active?`rgba(225,59,45,0.08)`:"transparent",
+                                  color:active?RED:MUTED}}>
+                                  {active?"✓ ":""}{n}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {/* Free text note */}
+                          <input
+                            type="text"
+                            placeholder="Nota adicional (ej: sin sal, extra picante…)"
+                            value={cart[p.id]?.customNote||""}
+                            onChange={e=>setCustomNote(p.id,e.target.value)}
+                            style={{width:"100%",padding:"10px 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,
+                              fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fafafa",outline:"none"}}
+                          />
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -623,15 +674,21 @@ export default function App() {
             </div>
 
             <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:14}}>
-              {cartItems.map(i=>(
-                <div key={i.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:CREAM,borderRadius:10,padding:"10px 14px"}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <span style={{background:RED,color:"#fff",width:22,height:22,borderRadius:"50%",fontSize:12,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center"}}>{i.qty}</span>
-                    <span style={{fontSize:14,fontWeight:700,color:DARK}}>{i.name}</span>
+              {cartItems.map(i=>{
+                const allNotes = [...i.notes, i.customNote].filter(Boolean).join(", ");
+                return (
+                  <div key={i.id} style={{background:CREAM,borderRadius:10,padding:"10px 14px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <span style={{background:RED,color:"#fff",width:22,height:22,borderRadius:"50%",fontSize:12,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center"}}>{i.qty}</span>
+                        <span style={{fontSize:14,fontWeight:700,color:DARK}}>{i.name}</span>
+                      </div>
+                      <span style={{fontSize:14,fontWeight:900,color:RED}}>{$(i.qty*i.price)}</span>
+                    </div>
+                    {allNotes && <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:4,paddingLeft:30}}>📝 {allNotes}</p>}
                   </div>
-                  <span style={{fontSize:14,fontWeight:900,color:RED}}>{$(i.qty*i.price)}</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             <div style={{background:DARK,borderRadius:12,padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
