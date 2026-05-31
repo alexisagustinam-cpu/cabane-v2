@@ -180,16 +180,16 @@ export default function App() {
 
   const loadCashier = useCallback(async () => {
     setCLoading(true);
-    const todayStart = new Date(); todayStart.setHours(0,0,0,0);
-    const [{ data: orders }, { data: payments }] = await Promise.all([
-      getDB().from("orders").select("*, order_items(*)").order("created_at",{ascending:false}),
-      getDB().from("payments").select("method,amount").gte("created_at",todayStart.toISOString()),
-    ]);
-    setCOrders(orders||[]);
+    const { data: orders } = await getDB().from("orders").select("*, order_items(*)").order("created_at",{ascending:false});
+    const paidIds = (orders||[]).filter((o:Order)=>o.status==="pagado").map((o:Order)=>o.id);
     const pb = {efectivo:0,tarjeta:0,transferencia:0};
-    (payments||[]).forEach((p:{method:string;amount:number}) => {
-      if (p.method in pb) pb[p.method as keyof typeof pb] += p.amount;
-    });
+    if (paidIds.length) {
+      const { data: payments } = await getDB().from("payments").select("method,amount").in("order_id",paidIds);
+      (payments||[]).forEach((p:{method:string;amount:number}) => {
+        if (p.method in pb) pb[p.method as keyof typeof pb] += p.amount;
+      });
+    }
+    setCOrders(orders||[]);
     setCPayBreakdown(pb);
     setCLoading(false);
   }, []);
