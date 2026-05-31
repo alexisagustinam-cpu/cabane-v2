@@ -460,6 +460,8 @@ export default function App() {
       {/* Top bar */}
       <header style={{background:DARK,padding:"0 16px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100,boxShadow:`0 2px 12px rgba(23,18,15,0.3)`}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <img src="/640524393_18019556534658854_3130895744895686814_n.jpg" alt="Cabane" onError={(e)=>{(e.currentTarget as HTMLImageElement).style.display="none"}}
+            style={{width:34,height:34,borderRadius:8,objectFit:"contain" as const,background:DARK}}/>
           <span style={{fontWeight:900,fontSize:16,color:"#fff",letterSpacing:"-0.01em"}}><span style={{color:"#E8D5B7"}}>CABANE</span> <span style={{color:"rgba(255,255,255,0.5)",fontWeight:600,fontSize:13}}>Sandwiches</span></span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
