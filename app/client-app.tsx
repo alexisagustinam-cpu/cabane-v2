@@ -384,44 +384,68 @@ export default function App() {
 
   // ── LOGIN ───────────────────────────────────────────────────────
   if (!session||!profile) return (
-    <div style={{minHeight:"100vh",background:DARK,display:"flex",alignItems:"center",justifyContent:"center",padding:"24px 16px",fontFamily:FONT,position:"relative",overflow:"hidden"}}>
-      {/* Brand glow backgrounds */}
-      <div style={{position:"absolute",top:"-20%",left:"50%",transform:"translateX(-50%)",width:"80%",height:"60%",background:`radial-gradient(ellipse, rgba(181,137,74,0.12) 0%, transparent 70%)`,pointerEvents:"none"}}/>
-      <div style={{position:"absolute",bottom:0,left:0,width:"40%",height:"40%",background:`radial-gradient(ellipse, rgba(122,30,58,0.15) 0%, transparent 70%)`,pointerEvents:"none"}}/>
+    <div style={{minHeight:"100vh",background:`linear-gradient(160deg, #1A0D12 0%, #2A1A1F 50%, #1A0D12 100%)`,display:"flex",alignItems:"center",justifyContent:"center",padding:"24px 16px",fontFamily:FONT,position:"relative",overflow:"hidden"}}>
+      {/* Decorative glows */}
+      <div style={{position:"absolute",top:"10%",left:"50%",transform:"translateX(-50%)",width:"70%",height:"50%",background:`radial-gradient(ellipse, rgba(122,30,58,0.25) 0%, transparent 70%)`,pointerEvents:"none"}}/>
+      <div style={{position:"absolute",bottom:"-10%",right:"-10%",width:"50%",height:"50%",background:`radial-gradient(ellipse, rgba(181,137,74,0.1) 0%, transparent 70%)`,pointerEvents:"none"}}/>
+      <div style={{position:"absolute",top:"50%",left:"-15%",width:"40%",height:"40%",background:`radial-gradient(ellipse, rgba(122,30,58,0.12) 0%, transparent 70%)`,pointerEvents:"none"}}/>
 
-      <div style={{width:"100%",maxWidth:400,position:"relative",zIndex:1,animation:"fadeUp .4s ease both"}}>
-        {/* Logo */}
-        <div style={{textAlign:"center" as const,marginBottom:40}}>
-          <div style={{marginBottom:20}}>
+      <div style={{width:"100%",maxWidth:380,position:"relative",zIndex:1,animation:"fadeUp .5s ease both"}}>
+
+        {/* Logo centrado */}
+        <div style={{textAlign:"center" as const,marginBottom:36}}>
+          <div style={{
+            display:"inline-block",
+            padding:6,
+            borderRadius:28,
+            background:`linear-gradient(145deg, rgba(122,30,58,0.5), rgba(181,137,74,0.2))`,
+            border:"1px solid rgba(181,137,74,0.25)",
+            boxShadow:"0 20px 60px rgba(0,0,0,0.5), 0 0 40px rgba(122,30,58,0.3)",
+            marginBottom:24,
+          }}>
             <img
               src="/640524393_18019556534658854_3130895744895686814_n.jpg"
               alt="Cabane Sandwiches"
               onError={(e)=>{ (e.currentTarget as HTMLImageElement).style.display="none"; }}
-              style={{width:160,height:160,objectFit:"contain" as const,filter:"brightness(1.05)"}}
+              style={{width:180,height:180,objectFit:"contain" as const,borderRadius:22,display:"block"}}
             />
           </div>
-          <h1 style={{fontSize:28,fontWeight:900,color:"#E8D5B7",letterSpacing:"0.12em",lineHeight:1.1,marginBottom:4,textTransform:"uppercase" as const}}>
-            Cabane
-          </h1>
-          <p style={{color:"rgba(232,213,183,0.5)",fontSize:13,fontWeight:600,letterSpacing:"0.2em",textTransform:"uppercase" as const,marginBottom:6}}>Sandwiches</p>
-          <p style={{color:"rgba(255,255,255,0.3)",fontSize:12,fontWeight:500}}>Sistema de pedidos</p>
+          <div style={{height:1,background:"linear-gradient(90deg, transparent, rgba(181,137,74,0.4), transparent)",marginBottom:20}}/>
+          <p style={{color:"rgba(232,213,183,0.4)",fontSize:11,fontWeight:700,letterSpacing:"0.3em",textTransform:"uppercase" as const}}>Sistema de pedidos</p>
         </div>
 
         {/* Form */}
-        <div style={{background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:20,padding:28}}>
+        <div style={{
+          background:"rgba(255,255,255,0.04)",
+          border:"1px solid rgba(181,137,74,0.15)",
+          borderRadius:24,
+          padding:"28px 24px",
+          backdropFilter:"blur(12px)",
+          boxShadow:"0 24px 64px rgba(0,0,0,0.4)",
+        }}>
           <div style={{marginBottom:16}}>
-            <label style={{fontSize:13,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase" as const,letterSpacing:"0.08em",display:"block",marginBottom:8}}>Email</label>
+            <label style={{fontSize:11,fontWeight:700,color:"rgba(232,213,183,0.45)",textTransform:"uppercase" as const,letterSpacing:"0.12em",display:"block",marginBottom:8}}>Email</label>
             <input type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} placeholder="tu@email.com"
-              style={{width:"100%",padding:"14px 16px",borderRadius:12,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.08)",color:"#fff",fontSize:15,fontWeight:600,outline:"none",fontFamily:FONT}}/>
+              style={{width:"100%",padding:"14px 16px",borderRadius:12,border:"1.5px solid rgba(181,137,74,0.2)",background:"rgba(255,255,255,0.05)",color:"#E8D5B7",fontSize:15,fontWeight:600,outline:"none",fontFamily:FONT}}/>
           </div>
-          <div style={{marginBottom:20}}>
-            <label style={{fontSize:13,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase" as const,letterSpacing:"0.08em",display:"block",marginBottom:8}}>Contraseña</label>
+          <div style={{marginBottom:24}}>
+            <label style={{fontSize:11,fontWeight:700,color:"rgba(232,213,183,0.45)",textTransform:"uppercase" as const,letterSpacing:"0.12em",display:"block",marginBottom:8}}>Contraseña</label>
             <input type="password" value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} placeholder="••••••••"
-              style={{width:"100%",padding:"14px 16px",borderRadius:12,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.08)",color:"#fff",fontSize:15,fontWeight:600,outline:"none",fontFamily:FONT}}/>
+              style={{width:"100%",padding:"14px 16px",borderRadius:12,border:"1.5px solid rgba(181,137,74,0.2)",background:"rgba(255,255,255,0.05)",color:"#E8D5B7",fontSize:15,fontWeight:600,outline:"none",fontFamily:FONT}}/>
           </div>
-          {loginErr && <div style={{background:"rgba(122,30,58,0.2)",border:"1px solid rgba(122,30,58,0.5)",borderRadius:10,padding:"10px 14px",color:"#F0A0B0",fontSize:13,fontWeight:600,marginBottom:16}}>{loginErr}</div>}
-          <button disabled={loginLoading||!email||!pass} onClick={login}
-            style={{...btn(RED,"#fff",loginLoading||!email||!pass),width:"100%",fontSize:16,fontWeight:800,height:52}}>
+          {loginErr && (
+            <div style={{background:"rgba(122,30,58,0.25)",border:"1px solid rgba(122,30,58,0.5)",borderRadius:10,padding:"10px 14px",color:"#F0A0B0",fontSize:13,fontWeight:600,marginBottom:16}}>
+              {loginErr}
+            </div>
+          )}
+          <button disabled={loginLoading||!email||!pass} onClick={login} style={{
+            width:"100%",height:52,borderRadius:14,fontSize:15,fontWeight:800,fontFamily:FONT,border:"none",cursor:loginLoading||!email||!pass?"not-allowed":"pointer",
+            background:loginLoading||!email||!pass?"rgba(122,30,58,0.3)":`linear-gradient(135deg, ${RED}, #5C142C)`,
+            color:loginLoading||!email||!pass?"rgba(255,255,255,0.3)":"#E8D5B7",
+            boxShadow:loginLoading||!email||!pass?"none":"0 8px 24px rgba(122,30,58,0.5)",
+            letterSpacing:"0.04em",
+            transition:"all .2s",
+          }}>
             {loginLoading ? "Ingresando…" : "Ingresar"}
           </button>
         </div>
