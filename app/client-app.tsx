@@ -20,13 +20,13 @@ interface CartItem extends Product { qty: number; notes: string[]; customNote: s
 
 const $ = (n: number) => `$${n.toFixed(2)}`;
 const MESAS = ["Mesa 1","Mesa 2","Mesa 3","Mesa 4","Para llevar","Delivery"];
-const CAT_ORDER = ["Sánduches","Combos","Bebidas","Extras"];
-const QUICK_NOTES = ["Sin cebolla","Sin salsa","Extra queso","Bien tostado","Sin pepinillo","Sin mayonesa","Término medio","Bien cocido","Para llevar","Sin picante"];
+const CAT_ORDER = ["Sánduches","Desayunos","Clásicos","Ensaladas","Tablitas","Para Compartir","Bebidas","Cafés","Postres"];
+const QUICK_NOTES = ["Sin cebolla","Sin mayonesa","Extra queso","Sin pepinillo","Sin tomate","Bien tostado","Sin lechuga","Extra salsa","Para llevar","Sin picante","Sin sal","Término medio"];
 const ROLE_SCREENS: Record<Role, string[]> = { waiter:["waiter"], kitchen:["kitchen"], cashier:["cashier"], admin:["waiter","kitchen","cashier"] };
 const SL: Record<string,string> = { waiter:"Mesero", kitchen:"Cocina", cashier:"Caja" };
 
 const FONT = "'Nunito', sans-serif";
-const RED = "#E13B2D", DARK = "#17120F", CREAM = "#FFF4E3", GOLD = "#F5B233", GREEN = "#2F7D32", MUTED = "#8B6F5E", BORDER = "#EDE0CC", CARD = "#FFFFFF", CREAM2 = "#F5E4CC";
+const RED = "#7A1E3A", DARK = "#2A1A1F", CREAM = "#EDE0CE", GOLD = "#B5894A", GREEN = "#2F7D32", MUTED = "#7A6555", BORDER = "#C4A882", CARD = "#F7F0E6", CREAM2 = "#D4BFA0";
 
 const GLOBAL_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap');
@@ -172,7 +172,7 @@ export default function App() {
       notes:[...i.notes, i.customNote].filter(Boolean).join(", ")||null
     })));
     setCart({}); setModal(false);
-    setSentMsg(`✓ Pedido #${order.order_number} enviado a cocina`);
+    setSentMsg(`Pedido #${order.order_number} enviado a cocina`);
     setTimeout(()=>setSentMsg(""),3500);
     setSending(false);
   }
@@ -233,15 +233,15 @@ export default function App() {
   // ── LOGIN ───────────────────────────────────────────────────────
   if (!session||!profile) return (
     <div style={{minHeight:"100vh",background:DARK,display:"flex",alignItems:"center",justifyContent:"center",padding:"24px 16px",fontFamily:FONT,position:"relative",overflow:"hidden"}}>
-      {/* Warm glow backgrounds */}
-      <div style={{position:"absolute",top:"-20%",left:"50%",transform:"translateX(-50%)",width:"80%",height:"60%",background:`radial-gradient(ellipse, rgba(245,178,51,0.15) 0%, transparent 70%)`,pointerEvents:"none"}}/>
-      <div style={{position:"absolute",bottom:0,left:0,width:"40%",height:"40%",background:`radial-gradient(ellipse, rgba(225,59,45,0.08) 0%, transparent 70%)`,pointerEvents:"none"}}/>
+      {/* Brand glow backgrounds */}
+      <div style={{position:"absolute",top:"-20%",left:"50%",transform:"translateX(-50%)",width:"80%",height:"60%",background:`radial-gradient(ellipse, rgba(181,137,74,0.12) 0%, transparent 70%)`,pointerEvents:"none"}}/>
+      <div style={{position:"absolute",bottom:0,left:0,width:"40%",height:"40%",background:`radial-gradient(ellipse, rgba(122,30,58,0.15) 0%, transparent 70%)`,pointerEvents:"none"}}/>
 
       <div style={{width:"100%",maxWidth:400,position:"relative",zIndex:1,animation:"fadeUp .4s ease both"}}>
         {/* Logo */}
         <div style={{textAlign:"center",marginBottom:40}}>
-          <div style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:64,height:64,background:`linear-gradient(135deg, ${GOLD}, #D4952A)`,borderRadius:20,fontSize:28,marginBottom:16,boxShadow:`0 8px 24px rgba(245,178,51,0.4)`}}>
-            🥪
+          <div style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:64,height:64,background:`linear-gradient(135deg, ${RED}, #5C142C)`,borderRadius:20,fontSize:22,fontWeight:900,color:"#E8D5B7",marginBottom:16,boxShadow:`0 8px 24px rgba(122,30,58,0.5)`,letterSpacing:"-0.02em"}}>
+            CB
           </div>
           <h1 style={{fontSize:32,fontWeight:900,color:"#fff",letterSpacing:"-0.02em",lineHeight:1.1,marginBottom:6}}>
             <span style={{color:GOLD}}>Cabane</span> Sandwiches
@@ -261,7 +261,7 @@ export default function App() {
             <input type="password" value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} placeholder="••••••••"
               style={{width:"100%",padding:"14px 16px",borderRadius:12,border:"1.5px solid rgba(255,255,255,0.15)",background:"rgba(255,255,255,0.08)",color:"#fff",fontSize:15,fontWeight:600,outline:"none",fontFamily:FONT}}/>
           </div>
-          {loginErr && <div style={{background:"rgba(225,59,45,0.15)",border:"1px solid rgba(225,59,45,0.4)",borderRadius:10,padding:"10px 14px",color:"#FF8070",fontSize:13,fontWeight:600,marginBottom:16}}>⚠️ {loginErr}</div>}
+          {loginErr && <div style={{background:"rgba(122,30,58,0.2)",border:"1px solid rgba(122,30,58,0.5)",borderRadius:10,padding:"10px 14px",color:"#F0A0B0",fontSize:13,fontWeight:600,marginBottom:16}}>{loginErr}</div>}
           <button disabled={loginLoading||!email||!pass} onClick={login}
             style={{...btn(RED,"#fff",loginLoading||!email||!pass),width:"100%",fontSize:16,fontWeight:800,height:52}}>
             {loginLoading ? "Ingresando…" : "Ingresar"}
@@ -278,8 +278,7 @@ export default function App() {
       {/* Top bar */}
       <header style={{background:DARK,padding:"0 16px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100,boxShadow:`0 2px 12px rgba(23,18,15,0.3)`}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <span style={{fontSize:20}}>🥪</span>
-          <span style={{fontWeight:900,fontSize:16,color:"#fff",letterSpacing:"-0.01em"}}><span style={{color:GOLD}}>Cabane</span> Sandwiches</span>
+          <span style={{fontWeight:900,fontSize:16,color:"#fff",letterSpacing:"-0.01em"}}><span style={{color:"#E8D5B7"}}>CABANE</span> <span style={{color:"rgba(255,255,255,0.5)",fontWeight:600,fontSize:13}}>Sandwiches</span></span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <div style={{textAlign:"right" as const}}>
@@ -539,7 +538,6 @@ export default function App() {
 
           {kOrders.length===0&&!kLoading ? (
             <div style={{textAlign:"center" as const,padding:"60px 20px"}}>
-              <p style={{fontSize:48,marginBottom:12}}>👨‍🍳</p>
               <p style={{fontWeight:800,fontSize:20,color:MUTED}}>Sin pedidos activos</p>
               <p style={{fontSize:14,color:MUTED,marginTop:4}}>Los nuevos pedidos aparecerán aquí</p>
             </div>
@@ -569,7 +567,7 @@ export default function App() {
                           </div>
                           {i.notes && (
                             <p style={{fontSize:12,fontWeight:700,color:RED,marginTop:4,display:"flex",alignItems:"center",gap:4}}>
-                              <span>📝</span> {i.notes}
+                              Nota: {i.notes}
                             </p>
                           )}
                         </div>
@@ -628,7 +626,6 @@ export default function App() {
 
           {cOrders.filter(o=>o.status!=="pagado").length===0&&!cLoading ? (
             <div style={{textAlign:"center" as const,padding:"60px 20px"}}>
-              <p style={{fontSize:48,marginBottom:12}}>✅</p>
               <p style={{fontWeight:800,fontSize:20,color:MUTED}}>Sin pedidos pendientes</p>
             </div>
           ) : (
@@ -662,16 +659,16 @@ export default function App() {
                               <span>{i.quantity}× {i.product_name}</span>
                               <span>{$(i.quantity*i.unit_price)}</span>
                             </div>
-                            {i.notes && <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:2}}>📝 {i.notes}</p>}
+                            {i.notes && <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:2}}>Nota: {i.notes}</p>}
                           </div>
                         ))}
                       </div>
                     )}
 
-                    {!canPay && <p style={{fontSize:13,color:MUTED,fontWeight:600,marginBottom:12,background:CREAM2,borderRadius:8,padding:"8px 12px"}}>⏳ Esperando que cocina marque como Listo</p>}
+                    {!canPay && <p style={{fontSize:13,color:MUTED,fontWeight:600,marginBottom:12,background:CREAM2,borderRadius:8,padding:"8px 12px"}}>Esperando que cocina marque como Listo</p>}
                     <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
                       {(["efectivo","tarjeta","transferencia"] as const).map(m=>{
-                        const labels={efectivo:"💵 Efectivo",tarjeta:"💳 Tarjeta",transferencia:"📱 Transferencia"};
+                        const labels={efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia"};
                         const bgs={efectivo:DARK,tarjeta:RED,transferencia:GOLD};
                         const fgs={efectivo:"#fff",tarjeta:"#fff",transferencia:DARK};
                         return (
@@ -715,7 +712,7 @@ export default function App() {
                       </div>
                       <span style={{fontSize:14,fontWeight:900,color:RED}}>{$(i.qty*i.price)}</span>
                     </div>
-                    {allNotes && <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:4,paddingLeft:30}}>📝 {allNotes}</p>}
+                    {allNotes && <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:4,paddingLeft:30}}>Nota: {allNotes}</p>}
                   </div>
                 );
               })}
@@ -729,7 +726,7 @@ export default function App() {
             <div style={{display:"grid",gridTemplateColumns:"1fr 1.6fr",gap:10}}>
               <button onClick={()=>setModal(false)} style={{...btn(CREAM2,DARK),height:52}}>Editar</button>
               <button disabled={sending} onClick={sendToKitchen} style={{...btn(RED,"#fff",sending),height:52,fontSize:16,fontWeight:800}}>
-                {sending?"Enviando…":"🚀 Enviar a cocina"}
+                {sending?"Enviando…":"Enviar a cocina"}
               </button>
             </div>
           </div>
