@@ -394,7 +394,7 @@ export default function App() {
         <div style={{textAlign:"center" as const,marginBottom:40}}>
           <div style={{marginBottom:20}}>
             <img
-              src="/logo.png"
+              src="/640524393_18019556534658854_3130895744895686814_n.jpg"
               alt="Cabane Sandwiches"
               onError={(e)=>{ (e.currentTarget as HTMLImageElement).style.display="none"; }}
               style={{width:160,height:160,objectFit:"contain" as const,filter:"brightness(1.05)"}}
