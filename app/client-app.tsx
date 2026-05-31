@@ -17,7 +17,7 @@ interface Product { id: string; name: string; category: string; price: number }
 interface OrderItem { id: string; product_name: string; quantity: number; unit_price: number; notes?: string }
 interface Order { id: string; order_number: number; table_label: string; status: Status; total: number; created_at: string; order_items?: OrderItem[] }
 interface CartItem extends Product { qty: number; notes: string[]; customNote: string }
-interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number} }
+interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[] }
 
 function playBeep() {
   try {
@@ -105,6 +105,7 @@ export default function App() {
   const [adminLoading, setAdminLoading] = useState(false);
   const [newProd, setNewProd] = useState({name:"",category:CAT_ORDER[0],price:""});
   const [tick, setTick] = useState(0);
+  const [kSummary, setKSummary] = useState<{name:string;qty:number}[]>([]);
   const styleRef = useRef(false);
 
   useEffect(() => {
@@ -161,8 +162,19 @@ export default function App() {
 
   const loadKitchen = useCallback(async () => {
     setKLoading(true);
-    const { data }: { data: Order[]|null } = await getDB().from("orders").select("*, order_items(*)").in("status",["enviado","preparando","listo"]).order("created_at",{ascending:false});
-    setKOrders(data||[]); setKLoading(false);
+    const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+    const [{ data: orders }, { data: summaryItems }] = await Promise.all([
+      getDB().from("orders").select("*, order_items(*)").in("status",["enviado","preparando","listo"]).order("created_at",{ascending:false}),
+      getDB().from("order_items").select("product_name,quantity,orders!inner(created_at,status)")
+        .neq("orders.status","cancelado").gte("orders.created_at",todayStart.toISOString()),
+    ]);
+    setKOrders(orders||[]);
+    const sMap: Record<string,number> = {};
+    (summaryItems||[]).forEach((i:{product_name:string;quantity:number}) => {
+      sMap[i.product_name] = (sMap[i.product_name]||0) + i.quantity;
+    });
+    setKSummary(Object.entries(sMap).map(([name,qty])=>({name,qty})).sort((a,b)=>b.qty-a.qty).slice(0,6));
+    setKLoading(false);
   }, []);
 
   const loadCashier = useCallback(async () => {
@@ -225,8 +237,13 @@ export default function App() {
         .eq("orders.status","pagado").gte("orders.created_at",start),
     ]);
 
-    const todayOrders = await getDB().from("orders").select("id,total").eq("status","pagado").gte("created_at",todayStart);
+    const todayOrders = await getDB().from("orders").select("id,total,created_at").eq("status","pagado").gte("created_at",todayStart);
     const monthOrders = await getDB().from("orders").select("id,total").eq("status","pagado").gte("created_at",monthStart);
+    const hourlyData = Array(24).fill(0);
+    (todayOrders.data||[]).forEach((o:{total:number;created_at:string}) => {
+      const h = new Date(o.created_at).getHours();
+      hourlyData[h] += o.total;
+    });
 
     const pMap: Record<string,number> = {efectivo:0,tarjeta:0,transferencia:0};
     (payments||[]).forEach((p: {method:string;amount:number}) => { if(p.method in pMap) pMap[p.method]+=p.amount; });
@@ -248,6 +265,7 @@ export default function App() {
       monthCount:(monthOrders.data||[]).length,
       topProducts,
       payBreakdown:pMap as AdminStats["payBreakdown"],
+      hourlyData,
     });
     setAdminLoading(false);
   }
@@ -498,6 +516,10 @@ export default function App() {
               .waiter-sidebar{display:flex!important;height:calc(100vh - 56px);overflow-y:auto;position:sticky;top:56px}
               .product-list-item{flex-direction:row!important}
               .mesa-chips-row{display:none!important}
+              .product-grid{display:grid!important;grid-template-columns:repeat(2,1fr)!important;gap:10px!important}
+            }
+            @media(min-width:1200px){
+              .product-grid{grid-template-columns:repeat(3,1fr)!important}
             }
           `}</style>
           <div className="waiter-wrap" style={{display:"block",flex:1}}>
@@ -602,8 +624,8 @@ export default function App() {
                 </div>
               )}
 
-              {/* Product list — vertical, one per row, big touch targets */}
-              <div style={{padding:"12px 12px 0",display:"flex",flexDirection:"column",gap:8}}>
+              {/* Product list — vertical en móvil, grid en desktop */}
+              <div className="product-grid" style={{padding:"12px 12px 0",display:"flex",flexDirection:"column",gap:8}}>
                 {visProd.map(p=>{
                   const qty=cart[p.id]?.qty||0;
                   return (
@@ -729,6 +751,24 @@ export default function App() {
             ))}
           </div>
 
+          {/* Resumen del día */}
+          {kSummary.length>0 && (
+            <div style={{...card,padding:"12px 16px",marginBottom:16}}>
+              <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:10}}>Más pedido hoy</p>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
+                {kSummary.map((s,i)=>(
+                  <div key={s.name} style={{
+                    padding:"6px 14px",borderRadius:99,fontSize:13,fontWeight:800,
+                    background:i===0?RED:i===1?GOLD:CREAM2,
+                    color:i===0?"#fff":i===1?DARK:DARK,
+                  }}>
+                    {s.name} <span style={{opacity:0.7}}>×{s.qty}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {kOrders.length===0&&!kLoading ? (
             <div style={{textAlign:"center" as const,padding:"60px 20px"}}>
               <p style={{fontWeight:800,fontSize:20,color:MUTED}}>Sin pedidos activos</p>
@@ -787,7 +827,9 @@ export default function App() {
 
       {/* ── CAJA ───────────────────────────────────────────────── */}
       {screen==="cashier" && (
-        <div style={{padding:16,maxWidth:900,margin:"0 auto",width:"100%"}}>
+        <div style={{padding:16,maxWidth:1200,margin:"0 auto",width:"100%"}}>
+          <style>{`.cashier-grid{display:block}.cashier-sidebar{display:none}@media(min-width:900px){.cashier-grid{display:grid!important;grid-template-columns:1fr 340px;gap:20px;align-items:start}.cashier-sidebar{display:flex!important}}`}</style>
+
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap" as const,gap:10}}>
             <div>
               <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:2}}>Módulo</p>
@@ -798,45 +840,50 @@ export default function App() {
             </button>
           </div>
 
-          {/* Metrics */}
-          {(()=>{
-            const open=cOrders.filter(o=>o.status!=="pagado");
-            const paid=cOrders.filter(o=>o.status==="pagado");
-            const metrics=[
-              {v:String(open.length),l:"Abiertos",bg:DARK,fg:"#fff",acc:GOLD},
-              {v:String(open.filter(o=>o.status==="listo").length),l:"Listos",bg:RED,fg:"#fff",acc:"#fff"},
-              {v:$(open.reduce((s,o)=>s+o.total,0)),l:"Por cobrar",bg:GOLD,fg:DARK,acc:DARK},
-              {v:$(paid.reduce((s,o)=>s+o.total,0)),l:"Cobrado hoy",bg:GREEN,fg:"#fff",acc:"#fff"},
-            ];
-            return (
-              <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:20}}>
-                {metrics.map(({v,l,bg,fg,acc})=>(
-                  <div key={l} style={{background:bg,borderRadius:14,padding:"16px",boxShadow:`0 4px 16px ${bg}33`}}>
-                    <p style={{fontSize:"clamp(22px,4vw,30px)",fontWeight:900,color:acc,lineHeight:1,marginBottom:4}}>{v}</p>
-                    <p style={{fontSize:11,fontWeight:700,color:fg,opacity:0.6,textTransform:"uppercase" as const,letterSpacing:"0.1em"}}>{l}</p>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
+          {/* Métricas — visibles en móvil arriba, en desktop se mueven al sidebar */}
+          <div className="cashier-sidebar" style={{display:"none"}}/>
 
-          {cOrders.filter(o=>o.status!=="pagado").length===0&&!cLoading ? (
-            <div style={{textAlign:"center" as const,padding:"60px 20px"}}>
-              <p style={{fontWeight:800,fontSize:20,color:MUTED}}>Sin pedidos pendientes</p>
-            </div>
-          ) : (
-            <div style={{display:"flex",flexDirection:"column",gap:12}}>
-              {cOrders.filter(o=>o.status!=="pagado").map(o=>{
-                const canPay=o.status==="listo", busy=paying===o.id;
-                const time=new Date(o.created_at).toLocaleTimeString("es-EC",{hour:"2-digit",minute:"2-digit"});
+          <div className="cashier-grid">
+            {/* Columna izquierda: pedidos */}
+            <div>
+              {/* Métricas en móvil */}
+              {(()=>{
+                const open=cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado");
+                const paid=cOrders.filter(o=>o.status==="pagado");
                 return (
-                  <div key={o.id} style={{...card,padding:16,border:canPay?`2px solid ${GREEN}`:`1px solid ${BORDER}`}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
-                      <div>
-                        <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:4}}>#{o.order_number} · {time}</p>
-                        <p style={{fontSize:22,fontWeight:900,color:DARK,marginBottom:6}}>{o.table_label}</p>
-                        <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Preparando":"Listo para cobrar"}</span>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:16}}>
+                    {[
+                      {v:String(open.length),l:"Abiertos",bg:DARK,fg:"#fff",acc:GOLD},
+                      {v:String(open.filter(o=>o.status==="listo").length),l:"Listos p/ cobrar",bg:RED,fg:"#fff",acc:"#fff"},
+                      {v:$(open.reduce((s,o)=>s+o.total,0)),l:"Por cobrar",bg:GOLD,fg:DARK,acc:DARK},
+                      {v:$(paid.reduce((s,o)=>s+o.total,0)),l:"Cobrado hoy",bg:GREEN,fg:"#fff",acc:"#fff"},
+                    ].map(({v,l,bg,fg,acc})=>(
+                      <div key={l} style={{background:bg,borderRadius:14,padding:"14px",boxShadow:`0 4px 16px ${bg}33`}}>
+                        <p style={{fontSize:"clamp(18px,3vw,26px)",fontWeight:900,color:acc,lineHeight:1,marginBottom:4}}>{v}</p>
+                        <p style={{fontSize:11,fontWeight:700,color:fg,opacity:0.6,textTransform:"uppercase" as const,letterSpacing:"0.08em"}}>{l}</p>
                       </div>
+                    ))}
+                  </div>
+                );
+              })()}
+
+              {cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado").length===0&&!cLoading ? (
+                <div style={{textAlign:"center" as const,padding:"60px 20px"}}>
+                  <p style={{fontWeight:800,fontSize:20,color:MUTED}}>Sin pedidos pendientes</p>
+                </div>
+              ) : (
+                <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                  {cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado").map(o=>{
+                    const canPay=o.status==="listo", busy=paying===o.id;
+                    const time=new Date(o.created_at).toLocaleTimeString("es-EC",{hour:"2-digit",minute:"2-digit"});
+                    return (
+                      <div key={o.id} style={{...card,padding:16,border:canPay?`2px solid ${GREEN}`:`1px solid ${BORDER}`}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                          <div>
+                            <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:4}}>#{o.order_number} · {time}</p>
+                            <p style={{fontSize:22,fontWeight:900,color:DARK,marginBottom:6}}>{o.table_label}</p>
+                            <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Preparando":"Listo para cobrar"}</span>
+                          </div>
                       <div style={{display:"flex",flexDirection:"column" as const,alignItems:"flex-end",gap:8}}>
                         <p style={{fontSize:"clamp(22px,3vw,28px)",fontWeight:900,color:RED}}>{$(o.total)}</p>
                         <button onClick={()=>setExpandedOrder(expandedOrder===o.id?null:o.id)}
@@ -880,6 +927,47 @@ export default function App() {
               })}
             </div>
           )}
+        </div>
+
+            {/* Columna derecha sticky — resumen del día (solo desktop) */}
+            <aside className="cashier-sidebar" style={{flexDirection:"column",gap:12,position:"sticky" as const,top:72}}>
+              {(()=>{
+                const paid=cOrders.filter(o=>o.status==="pagado");
+                return (
+                  <>
+                    <div style={{...card,padding:16}}>
+                      <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:12}}>Resumen del día</p>
+                      <p style={{fontSize:32,fontWeight:900,color:DARK,lineHeight:1}}>{$(paid.reduce((s,o)=>s+o.total,0))}</p>
+                      <p style={{fontSize:13,fontWeight:600,color:MUTED,marginTop:4,marginBottom:16}}>{paid.length} pedidos cobrados</p>
+                      {[
+                        {l:"Efectivo",bg:DARK,fg:"#fff"},
+                        {l:"Tarjeta",bg:CREAM2,fg:DARK},
+                        {l:"Transferencia",bg:CREAM2,fg:DARK},
+                      ].map(({l,bg,fg})=>(
+                        <div key={l} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",borderRadius:10,background:bg,marginBottom:6}}>
+                          <span style={{fontSize:13,fontWeight:700,color:fg,opacity:0.8}}>{l}</span>
+                          <span style={{fontSize:15,fontWeight:900,color:fg}}>$0.00</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{...card,padding:16}}>
+                      <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:12}}>Últimos cobros</p>
+                      {paid.slice(0,5).map(o=>(
+                        <div key={o.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${BORDER}`}}>
+                          <div>
+                            <p style={{fontSize:13,fontWeight:700,color:DARK}}>#{o.order_number} · {o.table_label}</p>
+                            <p style={{fontSize:11,fontWeight:600,color:MUTED}}>{new Date(o.created_at).toLocaleTimeString("es-EC",{hour:"2-digit",minute:"2-digit"})}</p>
+                          </div>
+                          <span style={{fontSize:14,fontWeight:900,color:GREEN}}>{$(o.total)}</span>
+                        </div>
+                      ))}
+                      {paid.length===0 && <p style={{fontSize:13,color:MUTED,fontWeight:600}}>Sin cobros aún</p>}
+                    </div>
+                  </>
+                );
+              })()}
+            </aside>
+          </div>
         </div>
       )}
 
@@ -947,6 +1035,32 @@ export default function App() {
                     ))}
                   </div>
                 )}
+              </div>
+
+              {/* Gráfica ventas por hora */}
+              <div style={{...card,padding:16,marginTop:16}}>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:16}}>Ventas por hora — hoy</p>
+                {(()=>{
+                  const data = adminStats?.hourlyData||Array(24).fill(0);
+                  const max = Math.max(...data, 1);
+                  const now = new Date().getHours();
+                  return (
+                    <div style={{display:"flex",alignItems:"flex-end",gap:3,height:140,overflowX:"auto" as const}}>
+                      {data.map((v:number,h:number)=>(
+                        <div key={h} style={{display:"flex",flexDirection:"column" as const,alignItems:"center",flex:1,minWidth:20,gap:4}}>
+                          <div style={{
+                            width:"100%",borderRadius:"4px 4px 0 0",
+                            height:`${Math.max((v/max)*110,v>0?4:0)}px`,
+                            background:h===now?GOLD:v>0?RED:"rgba(196,168,130,0.2)",
+                            transition:"height .3s",
+                          }}/>
+                          <span style={{fontSize:9,fontWeight:700,color:h===now?GOLD:MUTED,lineHeight:1}}>{h}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+                {!adminStats && <p style={{fontSize:13,color:MUTED,fontWeight:600,marginTop:8}}>Sin datos aún</p>}
               </div>
             </div>
           )}
