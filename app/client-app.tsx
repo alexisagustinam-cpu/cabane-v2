@@ -17,6 +17,27 @@ interface Product { id: string; name: string; category: string; price: number }
 interface OrderItem { id: string; product_name: string; quantity: number; unit_price: number; notes?: string }
 interface Order { id: string; order_number: number; table_label: string; status: Status; total: number; created_at: string; order_items?: OrderItem[] }
 interface CartItem extends Product { qty: number; notes: string[]; customNote: string }
+interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number} }
+
+function playBeep() {
+  try {
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.frequency.value = 820;
+    gain.gain.setValueAtTime(0.25, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+    osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.6);
+  } catch(_) { /* silently ignore */ }
+}
+
+function elapsed(created_at: string): string {
+  const mins = Math.floor((Date.now() - new Date(created_at).getTime()) / 60000);
+  if (mins < 1) return "ahora";
+  if (mins === 1) return "1 min";
+  return `${mins} min`;
+}
 
 const $ = (n: number) => `$${n.toFixed(2)}`;
 const MESAS = ["Mesa 1","Mesa 2","Mesa 3","Mesa 4","Para llevar","Delivery"];
@@ -32,8 +53,8 @@ const NOTES_BY_CAT: Record<string, string[]> = {
   "Cafés":          ["Sin azúcar","Poca azúcar","Extra dulce","Sin hielo","Extra hielo","Leche de avena","Sin leche"],
   "Postres":        ["Sin crema","Extra salsa","Porción pequeña"],
 };
-const ROLE_SCREENS: Record<Role, string[]> = { waiter:["waiter"], kitchen:["kitchen"], cashier:["cashier"], admin:["waiter","kitchen","cashier"] };
-const SL: Record<string,string> = { waiter:"Mesero", kitchen:"Cocina", cashier:"Caja" };
+const ROLE_SCREENS: Record<Role, string[]> = { waiter:["waiter"], kitchen:["kitchen"], cashier:["cashier"], admin:["waiter","kitchen","cashier","admin"] };
+const SL: Record<string,string> = { waiter:"Mesero", kitchen:"Cocina", cashier:"Caja", admin:"Admin" };
 
 const FONT = "'Nunito', sans-serif";
 const RED = "#7A1E3A", DARK = "#2A1A1F", CREAM = "#EDE0CE", GOLD = "#B5894A", GREEN = "#2F7D32", MUTED = "#7A6555", BORDER = "#C4A882", CARD = "#F7F0E6", CREAM2 = "#D4BFA0";
@@ -77,6 +98,13 @@ export default function App() {
   const [cLoading, setCLoading] = useState(false);
   const [paying, setPaying] = useState<string|null>(null);
   const [expandedOrder, setExpandedOrder] = useState<string|null>(null);
+  const [adminStats, setAdminStats] = useState<AdminStats|null>(null);
+  const [adminProducts, setAdminProducts] = useState<Product[]>([]);
+  const [adminSection, setAdminSection] = useState<"stats"|"products">("stats");
+  const [adminPeriod, setAdminPeriod] = useState<"day"|"month">("day");
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [newProd, setNewProd] = useState({name:"",category:CAT_ORDER[0],price:""});
+  const [tick, setTick] = useState(0);
   const styleRef = useRef(false);
 
   useEffect(() => {
@@ -146,7 +174,94 @@ export default function App() {
   useEffect(() => {
     if (screen==="kitchen") loadKitchen();
     if (screen==="cashier") loadCashier();
+    if (screen==="admin") { loadAdminStats(); loadAdminProducts(); }
   }, [screen, loadKitchen, loadCashier]);
+
+  // Realtime cocina
+  useEffect(() => {
+    if (screen!=="kitchen") return;
+    const ch = getDB().channel("kitchen-rt")
+      .on("postgres_changes",{event:"INSERT",schema:"public",table:"orders"},
+        (p: {new: Order}) => { playBeep(); setKOrders((prev:Order[])=>[{...p.new,order_items:[]}, ...prev]); })
+      .on("postgres_changes",{event:"UPDATE",schema:"public",table:"orders"},
+        (p: {new: Order}) => {
+          setKOrders((prev:Order[])=>prev
+            .map((o:Order)=>o.id===p.new.id?{...o,...p.new}:o)
+            .filter((o:Order)=>["enviado","preparando","listo"].includes(o.status)));
+        })
+      .subscribe();
+    return () => { getDB().removeChannel(ch); };
+  }, [screen]);
+
+  // Timer para tiempo transcurrido en cocina
+  useEffect(() => {
+    const id = setInterval(()=>setTick((t:number)=>t+1), 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  async function loadAdminStats() {
+    setAdminLoading(true);
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(),now.getMonth(),now.getDate()).toISOString();
+    const monthStart = new Date(now.getFullYear(),now.getMonth(),1).toISOString();
+    const start = adminPeriod==="day" ? todayStart : monthStart;
+
+    const [{ data: _orders }, { data: payments }, { data: items }] = await Promise.all([
+      getDB().from("orders").select("id,total").eq("status","pagado").gte("created_at",start),
+      getDB().from("payments").select("method,amount").gte("created_at",start),
+      getDB().from("order_items").select("product_name,quantity,unit_price,orders!inner(status,created_at)")
+        .eq("orders.status","pagado").gte("orders.created_at",start),
+    ]);
+
+    const todayOrders = await getDB().from("orders").select("id,total").eq("status","pagado").gte("created_at",todayStart);
+    const monthOrders = await getDB().from("orders").select("id,total").eq("status","pagado").gte("created_at",monthStart);
+
+    const pMap: Record<string,number> = {efectivo:0,tarjeta:0,transferencia:0};
+    (payments||[]).forEach((p: {method:string;amount:number}) => { if(p.method in pMap) pMap[p.method]+=p.amount; });
+
+    const prodMap: Record<string,{qty:number;revenue:number}> = {};
+    (items||[]).forEach((i: {product_name:string;quantity:number;unit_price:number}) => {
+      if (!prodMap[i.product_name]) prodMap[i.product_name]={qty:0,revenue:0};
+      prodMap[i.product_name].qty+=i.quantity;
+      prodMap[i.product_name].revenue+=i.quantity*i.unit_price;
+    });
+    const topProducts = Object.entries(prodMap)
+      .map(([name,v])=>({name,...v}))
+      .sort((a,b)=>b.revenue-a.revenue).slice(0,10);
+
+    setAdminStats({
+      todayRevenue:(todayOrders.data||[]).reduce((s:number,o:{total:number})=>s+o.total,0),
+      monthRevenue:(monthOrders.data||[]).reduce((s:number,o:{total:number})=>s+o.total,0),
+      todayCount:(todayOrders.data||[]).length,
+      monthCount:(monthOrders.data||[]).length,
+      topProducts,
+      payBreakdown:pMap as AdminStats["payBreakdown"],
+    });
+    setAdminLoading(false);
+  }
+
+  async function loadAdminProducts() {
+    const { data } = await getDB().from("products").select("*").order("category").order("name");
+    setAdminProducts(data||[]);
+  }
+
+  async function addProduct() {
+    if (!newProd.name||!newProd.price) return;
+    await getDB().from("products").insert({name:newProd.name,category:newProd.category,price:parseFloat(newProd.price),is_active:true});
+    setNewProd({name:"",category:CAT_ORDER[0],price:""});
+    loadAdminProducts();
+  }
+
+  async function toggleProduct(id: string, is_active: boolean) {
+    setAdminProducts((prev:Product[])=>prev.map((p:Product)=>p.id===id?{...p,is_active:!is_active}:p));
+    await getDB().from("products").update({is_active:!is_active}).eq("id",id);
+  }
+
+  async function deleteProduct(id: string) {
+    if (!confirm("¿Eliminar producto?")) return;
+    setAdminProducts((prev:Product[])=>prev.filter((p:Product)=>p.id!==id));
+    await getDB().from("products").delete().eq("id",id);
+  }
 
   function changeQty(id: string, delta: number) {
     setCart(prev => {
@@ -571,12 +686,14 @@ export default function App() {
                 const next=o.status==="enviado"?"preparando":o.status==="preparando"?"listo":null;
                 const nextLabel=next==="preparando"?"Marcar Preparando":next==="listo"?"Marcar Listo":null;
                 const time=new Date(o.created_at).toLocaleTimeString("es-EC",{hour:"2-digit",minute:"2-digit"});
+                const mins=Math.floor((Date.now()-new Date(o.created_at).getTime())/60000);
+                void tick;
                 return (
                   <div key={o.id} style={{...card,padding:16,
                     border:o.status==="enviado"?`2px solid ${RED}`:o.status==="listo"?`2px solid ${GREEN}`:`1px solid ${BORDER}`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
                       <div>
-                        <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:2}}>#{o.order_number} · {time}</p>
+                        <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:2}}>#{o.order_number} · {time} · <span style={{color:mins>=15?RED:mins>=8?GOLD:GREEN,fontWeight:800}}>{elapsed(o.created_at)}</span></p>
                         <p style={{fontSize:22,fontWeight:900,color:DARK}}>{o.table_label}</p>
                       </div>
                       <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Prep.":"Listo"}</span>
@@ -705,6 +822,127 @@ export default function App() {
                   </div>
                 );
               })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── ADMIN ──────────────────────────────────────────────── */}
+      {screen==="admin" && (
+        <div style={{padding:16,maxWidth:1000,margin:"0 auto",width:"100%"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap" as const,gap:10}}>
+            <div>
+              <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:2}}>Panel</p>
+              <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK}}>Administración</h1>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>{setAdminSection("stats");loadAdminStats();}} style={{...btn(adminSection==="stats"?RED:CREAM2, adminSection==="stats"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Reportes</button>
+              <button onClick={()=>{setAdminSection("products");loadAdminProducts();}} style={{...btn(adminSection==="products"?RED:CREAM2, adminSection==="products"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Productos</button>
+            </div>
+          </div>
+
+          {adminSection==="stats" && (
+            <div>
+              {/* Selector período */}
+              <div style={{display:"flex",gap:8,marginBottom:16}}>
+                {(["day","month"] as const).map(p=>(
+                  <button key={p} onClick={()=>{setAdminPeriod(p);}} style={{...btn(adminPeriod===p?RED:CREAM2,adminPeriod===p?"#fff":DARK),height:38,padding:"0 20px",fontSize:13}}>
+                    {p==="day"?"Hoy":"Este mes"}
+                  </button>
+                ))}
+                <button onClick={loadAdminStats} style={{...btn(CREAM2,DARK),height:38,padding:"0 16px",fontSize:13}}>{adminLoading?"Cargando…":"↻"}</button>
+              </div>
+
+              {/* Métricas principales */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:20}}>
+                {[
+                  {v:$(adminPeriod==="day"?adminStats?.todayRevenue||0:adminStats?.monthRevenue||0),l:adminPeriod==="day"?"Facturado hoy":"Facturado este mes",bg:RED,fg:"#fff"},
+                  {v:String(adminPeriod==="day"?adminStats?.todayCount||0:adminStats?.monthCount||0),l:"Pedidos",bg:DARK,fg:"#fff"},
+                  {v:$(adminStats?.payBreakdown.efectivo||0),l:"Efectivo",bg:GOLD,fg:DARK},
+                  {v:$(adminStats?.payBreakdown.tarjeta||0),l:"Tarjeta",bg:GREEN,fg:"#fff"},
+                ].map(({v,l,bg,fg})=>(
+                  <div key={l} style={{background:bg,borderRadius:14,padding:"16px",boxShadow:`0 4px 16px ${bg}33`}}>
+                    <p style={{fontSize:"clamp(20px,4vw,28px)",fontWeight:900,color:fg,lineHeight:1,marginBottom:4}}>{v}</p>
+                    <p style={{fontSize:11,fontWeight:700,color:fg,opacity:0.65,textTransform:"uppercase" as const,letterSpacing:"0.1em"}}>{l}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Transferencia */}
+              <div style={{...card,padding:14,marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <p style={{fontSize:13,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em"}}>Transferencia</p>
+                <p style={{fontSize:22,fontWeight:900,color:DARK}}>{$(adminStats?.payBreakdown.transferencia||0)}</p>
+              </div>
+
+              {/* Top productos */}
+              <div style={{...card,padding:16}}>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Top productos</p>
+                {(adminStats?.topProducts||[]).length===0 ? (
+                  <p style={{fontSize:14,color:MUTED,fontWeight:600}}>Sin datos aún</p>
+                ) : (
+                  <div style={{display:"flex",flexDirection:"column" as const,gap:8}}>
+                    {(adminStats?.topProducts||[]).map((p,i)=>(
+                      <div key={p.name} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",background:i===0?`rgba(122,30,58,0.06)`:CREAM,borderRadius:10}}>
+                        <span style={{fontSize:13,fontWeight:900,color:MUTED,minWidth:20}}>{i+1}</span>
+                        <span style={{flex:1,fontSize:14,fontWeight:700,color:DARK}}>{p.name}</span>
+                        <span style={{fontSize:13,fontWeight:700,color:MUTED}}>{p.qty} uds</span>
+                        <span style={{fontSize:15,fontWeight:900,color:RED}}>{$(p.revenue)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {adminSection==="products" && (
+            <div>
+              {/* Agregar producto */}
+              <div style={{...card,padding:16,marginBottom:20}}>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar producto</p>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                  <input placeholder="Nombre" value={newProd.name} onChange={e=>setNewProd(p=>({...p,name:e.target.value}))}
+                    style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                  <input placeholder="Precio" type="number" value={newProd.price} onChange={e=>setNewProd(p=>({...p,price:e.target.value}))}
+                    style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                </div>
+                <select value={newProd.category} onChange={e=>setNewProd(p=>({...p,category:e.target.value}))}
+                  style={{width:"100%",padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none",marginBottom:10}}>
+                  {CAT_ORDER.map(c=><option key={c} value={c}>{c}</option>)}
+                </select>
+                <button onClick={addProduct} disabled={!newProd.name||!newProd.price}
+                  style={{...btn(RED,"#fff",!newProd.name||!newProd.price),width:"100%",height:48}}>
+                  Agregar producto
+                </button>
+              </div>
+
+              {/* Lista productos */}
+              <div style={{...card,padding:16}}>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Productos ({adminProducts.length})</p>
+                <div style={{display:"flex",flexDirection:"column" as const,gap:6}}>
+                  {CAT_ORDER.filter(c=>adminProducts.some(p=>p.category===c)).map(cat=>(
+                    <div key={cat}>
+                      <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",padding:"8px 0 4px"}}>{cat}</p>
+                      {adminProducts.filter(p=>p.category===cat).map(p=>(
+                        <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:CREAM,borderRadius:10,marginBottom:4,
+                          opacity:(p as Product & {is_active?:boolean}).is_active===false?0.5:1}}>
+                          <span style={{flex:1,fontSize:14,fontWeight:700,color:DARK}}>{p.name}</span>
+                          <span style={{fontSize:14,fontWeight:900,color:RED,minWidth:50,textAlign:"right" as const}}>{$(p.price)}</span>
+                          <button onClick={()=>toggleProduct(p.id,(p as Product & {is_active?:boolean}).is_active!==false)}
+                            style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
+                              background:(p as Product & {is_active?:boolean}).is_active===false?CREAM2:GREEN,color:(p as Product & {is_active?:boolean}).is_active===false?DARK:"#fff"}}>
+                            {(p as Product & {is_active?:boolean}).is_active===false?"Activar":"Activo"}
+                          </button>
+                          <button onClick={()=>deleteProduct(p.id)}
+                            style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
+                            Eliminar
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
         </div>
