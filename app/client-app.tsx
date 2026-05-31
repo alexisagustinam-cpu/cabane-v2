@@ -184,8 +184,12 @@ export default function App() {
     const paidIds = (orders||[]).filter((o:Order)=>o.status==="pagado").map((o:Order)=>o.id);
     const pb = {efectivo:0,tarjeta:0,transferencia:0};
     if (paidIds.length) {
-      const { data: payments } = await getDB().from("payments").select("method,amount").in("order_id",paidIds);
-      (payments||[]).forEach((p:{method:string;amount:number}) => {
+      const { data: payments } = await getDB().from("payments").select("order_id,method,amount").in("order_id",paidIds);
+      // Deduplicar: un pago por pedido (evita duplicados de pruebas anteriores)
+      const seen = new Set<string>();
+      (payments||[]).forEach((p:{order_id:string;method:string;amount:number}) => {
+        if (seen.has(p.order_id)) return;
+        seen.add(p.order_id);
         if (p.method in pb) pb[p.method as keyof typeof pb] += p.amount;
       });
     }
