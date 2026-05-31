@@ -95,6 +95,7 @@ export default function App() {
   const [kLoading, setKLoading] = useState(false);
   const [updating, setUpdating] = useState<string|null>(null);
   const [cOrders, setCOrders] = useState<Order[]>([]);
+  const [cPayBreakdown, setCPayBreakdown] = useState({efectivo:0,tarjeta:0,transferencia:0});
   const [cLoading, setCLoading] = useState(false);
   const [paying, setPaying] = useState<string|null>(null);
   const [expandedOrder, setExpandedOrder] = useState<string|null>(null);
@@ -179,8 +180,18 @@ export default function App() {
 
   const loadCashier = useCallback(async () => {
     setCLoading(true);
-    const { data }: { data: Order[]|null } = await getDB().from("orders").select("*, order_items(*)").order("created_at",{ascending:false});
-    setCOrders(data||[]); setCLoading(false);
+    const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+    const [{ data: orders }, { data: payments }] = await Promise.all([
+      getDB().from("orders").select("*, order_items(*)").order("created_at",{ascending:false}),
+      getDB().from("payments").select("method,amount").gte("created_at",todayStart.toISOString()),
+    ]);
+    setCOrders(orders||[]);
+    const pb = {efectivo:0,tarjeta:0,transferencia:0};
+    (payments||[]).forEach((p:{method:string;amount:number}) => {
+      if (p.method in pb) pb[p.method as keyof typeof pb] += p.amount;
+    });
+    setCPayBreakdown(pb);
+    setCLoading(false);
   }, []);
 
   useEffect(() => {
@@ -353,7 +364,8 @@ export default function App() {
 
   async function cobrar(id: string, method: string, amount: number) {
     setPaying(id);
-    setCOrders(prev=>prev.map(o=>o.id===id?{...o,status:"pagado"}:o));
+    setCOrders((prev:Order[])=>prev.map(o=>o.id===id?{...o,status:"pagado"}:o));
+    setCPayBreakdown((prev:{efectivo:number;tarjeta:number;transferencia:number})=>({...prev,[method]:(prev[method as keyof typeof prev]||0)+amount}));
     await getDB().from("payments").insert({order_id:id,method,amount});
     await getDB().from("orders").update({status:"pagado"}).eq("id",id);
     setPaying(null);
@@ -940,13 +952,13 @@ export default function App() {
                       <p style={{fontSize:32,fontWeight:900,color:DARK,lineHeight:1}}>{$(paid.reduce((s,o)=>s+o.total,0))}</p>
                       <p style={{fontSize:13,fontWeight:600,color:MUTED,marginTop:4,marginBottom:16}}>{paid.length} pedidos cobrados</p>
                       {[
-                        {l:"Efectivo",bg:DARK,fg:"#fff"},
-                        {l:"Tarjeta",bg:CREAM2,fg:DARK},
-                        {l:"Transferencia",bg:CREAM2,fg:DARK},
-                      ].map(({l,bg,fg})=>(
+                        {l:"Efectivo",k:"efectivo",bg:DARK,fg:"#fff"},
+                        {l:"Tarjeta",k:"tarjeta",bg:CREAM2,fg:DARK},
+                        {l:"Transferencia",k:"transferencia",bg:CREAM2,fg:DARK},
+                      ].map(({l,k,bg,fg})=>(
                         <div key={l} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",borderRadius:10,background:bg,marginBottom:6}}>
                           <span style={{fontSize:13,fontWeight:700,color:fg,opacity:0.8}}>{l}</span>
-                          <span style={{fontSize:15,fontWeight:900,color:fg}}>$0.00</span>
+                          <span style={{fontSize:15,fontWeight:900,color:fg}}>{$(cPayBreakdown[k as keyof typeof cPayBreakdown])}</span>
                         </div>
                       ))}
                     </div>
