@@ -21,7 +21,17 @@ interface CartItem extends Product { qty: number; notes: string[]; customNote: s
 const $ = (n: number) => `$${n.toFixed(2)}`;
 const MESAS = ["Mesa 1","Mesa 2","Mesa 3","Mesa 4","Para llevar","Delivery"];
 const CAT_ORDER = ["Sánduches","Desayunos","Clásicos","Ensaladas","Tablitas","Para Compartir","Bebidas","Cafés","Postres"];
-const QUICK_NOTES = ["Sin cebolla","Sin mayonesa","Extra queso","Sin pepinillo","Sin tomate","Bien tostado","Sin lechuga","Extra salsa","Para llevar","Sin picante","Sin sal","Término medio"];
+const NOTES_BY_CAT: Record<string, string[]> = {
+  "Sánduches":      ["Sin cebolla","Sin mayonesa","Sin tomate","Sin lechuga","Sin pepinillo","Extra queso","Extra salsa","Bien tostado","Sin picante"],
+  "Clásicos":       ["Sin cebolla","Sin mayonesa","Sin tomate","Sin lechuga","Sin pepinillo","Extra queso","Extra salsa","Bien tostado","Sin picante"],
+  "Desayunos":      ["Sin sal","Huevos revueltos","Huevos fritos","Sin tocino","Extra fruta","Bien cocido","Término medio"],
+  "Ensaladas":      ["Sin cebolla","Sin aderezo","Aderezo aparte","Extra pollo","Sin queso","Sin crutones"],
+  "Tablitas":       ["Sin aceitunas","Sin pepinillo","Extra queso","Sin salami","Pan extra"],
+  "Para Compartir": ["Sin aceitunas","Sin pepinillo","Extra queso","Sin salami","Pan extra"],
+  "Bebidas":        ["Sin azúcar","Poca azúcar","Extra dulce","Sin hielo","Extra hielo","Leche de avena","Sin leche"],
+  "Cafés":          ["Sin azúcar","Poca azúcar","Extra dulce","Sin hielo","Extra hielo","Leche de avena","Sin leche"],
+  "Postres":        ["Sin crema","Extra salsa","Porción pequeña"],
+};
 const ROLE_SCREENS: Record<Role, string[]> = { waiter:["waiter"], kitchen:["kitchen"], cashier:["cashier"], admin:["waiter","kitchen","cashier"] };
 const SL: Record<string,string> = { waiter:"Mesero", kitchen:"Cocina", cashier:"Caja" };
 
@@ -56,6 +66,7 @@ export default function App() {
   const [cart, setCart] = useState<Record<string,CartItem>>({});
   const [mesa, setMesa] = useState(MESAS[0]);
   const [cat, setCat] = useState("");
+  const [search, setSearch] = useState("");
   const [modal, setModal] = useState(false);
   const [sentMsg, setSentMsg] = useState("");
   const [sending, setSending] = useState(false);
@@ -201,7 +212,10 @@ export default function App() {
     const ai = CAT_ORDER.indexOf(a); const bi = CAT_ORDER.indexOf(b);
     return (ai===-1?99:ai) - (bi===-1?99:bi);
   });
-  const visProd = products.filter(p=>p.category===cat);
+  const visProd = products.filter(p=>{
+    if (search.trim()) return p.name.toLowerCase().includes(search.toLowerCase());
+    return p.category===cat;
+  });
   const screens = profile ? ROLE_SCREENS[profile.role] : [];
 
   // ── Shared component styles ─────────────────────────────────────
@@ -374,9 +388,18 @@ export default function App() {
 
             {/* Products area — mobile-first vertical list */}
             <main style={{paddingBottom:100}}>
-              {/* Sticky category chips */}
+              {/* Sticky header: búsqueda + categorías */}
               <div style={{position:"sticky" as const,top:0,zIndex:10,background:CREAM,borderBottom:`1px solid ${BORDER}`,padding:"10px 16px"}}>
-                {/* Mesa selector — solo en móvil (desktop lo muestra el sidebar) */}
+                {/* Búsqueda */}
+                <input
+                  type="search"
+                  placeholder="Buscar producto..."
+                  value={search}
+                  onChange={e=>{setSearch(e.target.value);}}
+                  style={{width:"100%",padding:"11px 16px",borderRadius:12,border:`1.5px solid ${search?RED:BORDER}`,
+                    background:CARD,color:DARK,fontSize:15,fontWeight:600,fontFamily:FONT,outline:"none",marginBottom:10}}
+                />
+                {/* Mesa selector — solo en móvil */}
                 <div className="mesa-chips-row" style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,scrollbarWidth:"none" as const}}>
                   {MESAS.map(m=>(
                     <button key={m} onClick={()=>setMesa(m)} style={{
@@ -388,18 +411,18 @@ export default function App() {
                     </button>
                   ))}
                 </div>
-                {/* Category chips */}
-                <div style={{display:"flex",gap:8,overflowX:"auto",scrollbarWidth:"none" as const,paddingTop:2}}>
+                {/* Category chips — ocultos cuando hay búsqueda activa */}
+                {!search && <div style={{display:"flex",gap:8,overflowX:"auto",scrollbarWidth:"none" as const,paddingTop:2}}>
                   {cats.map(c=>(
                     <button key={c} onClick={()=>setCat(c)} style={{
                       padding:"10px 20px",borderRadius:99,fontWeight:700,fontSize:14,
                       whiteSpace:"nowrap" as const,border:"none",cursor:"pointer",fontFamily:FONT,flexShrink:0,
                       background:cat===c?RED:CREAM2,color:cat===c?"#fff":DARK,
-                      boxShadow:cat===c?`0 4px 12px rgba(225,59,45,0.25)`:"none"}}>
+                      boxShadow:cat===c?`0 4px 12px rgba(122,30,58,0.25)`:"none"}}>
                       {c}
                     </button>
                   ))}
-                </div>
+                </div>}
               </div>
 
               {/* Success message */}
@@ -460,7 +483,7 @@ export default function App() {
                         <div style={{borderTop:`1px solid ${BORDER}`,paddingTop:10}}>
                           {/* Quick note chips */}
                           <div style={{display:"flex",gap:6,flexWrap:"wrap" as const,marginBottom:8}}>
-                            {QUICK_NOTES.map(n=>{
+                            {(NOTES_BY_CAT[p.category]||[]).map(n=>{
                               const active = cart[p.id]?.notes.includes(n);
                               return (
                                 <button key={n} onClick={()=>toggleNote(p.id,n)} style={{
