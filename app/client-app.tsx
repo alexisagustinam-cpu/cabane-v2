@@ -11,7 +11,7 @@ function getDB(): any {
 }
 
 type Role = "waiter" | "kitchen" | "cashier" | "admin";
-type Status = "enviado" | "preparando" | "listo" | "pagado";
+type Status = "enviado" | "preparando" | "listo" | "pagado" | "cancelado";
 interface Profile { id: string; name: string; role: Role }
 interface Product { id: string; name: string; category: string; price: number }
 interface OrderItem { id: string; product_name: string; quantity: number; unit_price: number; notes?: string }
@@ -177,6 +177,18 @@ export default function App() {
     if (screen==="admin") { loadAdminStats(); loadAdminProducts(); }
   }, [screen, loadKitchen, loadCashier]);
 
+  // Realtime caja
+  useEffect(() => {
+    if (screen!=="cashier") return;
+    const ch = getDB().channel("cashier-rt")
+      .on("postgres_changes",{event:"INSERT",schema:"public",table:"orders"},
+        (p: {new: Order}) => { setCOrders((prev:Order[])=>[{...p.new,order_items:[]}, ...prev]); })
+      .on("postgres_changes",{event:"UPDATE",schema:"public",table:"orders"},
+        (p: {new: Order}) => { setCOrders((prev:Order[])=>prev.map((o:Order)=>o.id===p.new.id?{...o,...p.new}:o)); })
+      .subscribe();
+    return () => { getDB().removeChannel(ch); };
+  }, [screen]);
+
   // Realtime cocina
   useEffect(() => {
     if (screen!=="kitchen") return;
@@ -286,21 +298,32 @@ export default function App() {
   }
 
   async function sendToKitchen() {
-    const items = Object.values(cart);
+    const items = Object.values(cart) as CartItem[];
     if (!items.length) return;
     const total = items.reduce((s,i)=>s+i.price*i.qty,0);
     setSending(true);
-    const { data: order, error }: { data: Order|null; error: unknown } = await getDB().from("orders").insert({table_label:mesa,status:"enviado",total}).select().single();
-    if (error||!order) { setSending(false); return; }
-    await getDB().from("order_items").insert(items.map(i=>({
-      order_id:order.id, product_id:i.id, product_name:i.name,
-      quantity:i.qty, unit_price:i.price,
-      notes:[...i.notes, i.customNote].filter(Boolean).join(", ")||null
-    })));
-    setCart({}); setModal(false);
-    setSentMsg(`Pedido #${order.order_number} enviado a cocina`);
-    setTimeout(()=>setSentMsg(""),3500);
+    try {
+      const { data: order, error }: { data: Order|null; error: unknown } = await getDB().from("orders").insert({table_label:mesa,status:"enviado",total}).select().single();
+      if (error||!order) { setSentMsg("Error al enviar. Revisa tu conexión e intenta de nuevo."); setSending(false); return; }
+      const { error: itemsError } = await getDB().from("order_items").insert(items.map((i:CartItem)=>({
+        order_id:order.id, product_id:i.id, product_name:i.name,
+        quantity:i.qty, unit_price:i.price,
+        notes:[...i.notes, i.customNote].filter(Boolean).join(", ")||null
+      })));
+      if (itemsError) { setSentMsg("Pedido creado pero hubo un error con los items. Avisa al admin."); setSending(false); return; }
+      setCart({}); setModal(false);
+      setSentMsg(`Pedido #${order.order_number} confirmado — cocina ya lo recibió`);
+      setTimeout(()=>setSentMsg(""),5000);
+    } catch(_) {
+      setSentMsg("Sin conexión. Verifica internet e intenta de nuevo.");
+    }
     setSending(false);
+  }
+
+  async function cancelOrder(id: string) {
+    if (!confirm("¿Cancelar este pedido?")) return;
+    setKOrders((prev:Order[])=>prev.filter((o:Order)=>o.id!==id));
+    await getDB().from("orders").update({status:"cancelado"}).eq("id",id);
   }
 
   async function kitchenUpdate(id: string, status: Status) {
@@ -346,7 +369,7 @@ export default function App() {
 
   const badge = (s: Status) => {
     const m: Record<Status,[string,string]> = {
-      enviado: [RED,"#fff"], preparando:[GOLD,DARK], listo:[GREEN,"#fff"], pagado:["#E0D0C0",MUTED]
+      enviado: [RED,"#fff"], preparando:[GOLD,DARK], listo:[GREEN,"#fff"], pagado:["#E0D0C0",MUTED], cancelado:["#D0C0B0",MUTED]
     };
     return { background:m[s][0], color:m[s][1], padding:"4px 12px", borderRadius:99, fontSize:12, fontWeight:800, letterSpacing:"0.03em", display:"inline-block" as const };
   };
@@ -368,14 +391,20 @@ export default function App() {
 
       <div style={{width:"100%",maxWidth:400,position:"relative",zIndex:1,animation:"fadeUp .4s ease both"}}>
         {/* Logo */}
-        <div style={{textAlign:"center",marginBottom:40}}>
-          <div style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:64,height:64,background:`linear-gradient(135deg, ${RED}, #5C142C)`,borderRadius:20,fontSize:22,fontWeight:900,color:"#E8D5B7",marginBottom:16,boxShadow:`0 8px 24px rgba(122,30,58,0.5)`,letterSpacing:"-0.02em"}}>
-            CB
+        <div style={{textAlign:"center" as const,marginBottom:40}}>
+          <div style={{marginBottom:20}}>
+            <img
+              src="/logo.png"
+              alt="Cabane Sandwiches"
+              onError={(e)=>{ (e.currentTarget as HTMLImageElement).style.display="none"; }}
+              style={{width:160,height:160,objectFit:"contain" as const,filter:"brightness(1.05)"}}
+            />
           </div>
-          <h1 style={{fontSize:32,fontWeight:900,color:"#fff",letterSpacing:"-0.02em",lineHeight:1.1,marginBottom:6}}>
-            <span style={{color:GOLD}}>Cabane</span> Sandwiches
+          <h1 style={{fontSize:28,fontWeight:900,color:"#E8D5B7",letterSpacing:"0.12em",lineHeight:1.1,marginBottom:4,textTransform:"uppercase" as const}}>
+            Cabane
           </h1>
-          <p style={{color:"rgba(255,255,255,0.4)",fontSize:14,fontWeight:500}}>Sistema de pedidos</p>
+          <p style={{color:"rgba(232,213,183,0.5)",fontSize:13,fontWeight:600,letterSpacing:"0.2em",textTransform:"uppercase" as const,marginBottom:6}}>Sandwiches</p>
+          <p style={{color:"rgba(255,255,255,0.3)",fontSize:12,fontWeight:500}}>Sistema de pedidos</p>
         </div>
 
         {/* Form */}
@@ -720,6 +749,7 @@ export default function App() {
                     <div style={{display:"flex",gap:8}}>
                       {nextLabel && <button disabled={busy} onClick={()=>kitchenUpdate(o.id,next as Status)} style={{...btn(RED,"#fff",busy),flex:1,height:50}}>{busy?"Guardando…":nextLabel}</button>}
                       {o.status==="listo" && <button disabled={busy} onClick={()=>kitchenUpdate(o.id,"preparando")} style={{...btn(CREAM2,DARK,busy),flex:1,height:50}}>{busy?"…":"Regresar"}</button>}
+                      {o.status==="enviado" && <button disabled={busy} onClick={()=>cancelOrder(o.id)} style={{...btn(CREAM2,MUTED,busy),height:50,padding:"0 14px",fontSize:13}}>Cancelar</button>}
                     </div>
                   </div>
                 );
