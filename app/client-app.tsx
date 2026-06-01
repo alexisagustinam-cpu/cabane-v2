@@ -180,7 +180,8 @@ export default function App() {
 
   const loadCashier = useCallback(async () => {
     setCLoading(true);
-    const { data: orders } = await getDB().from("orders").select("*, order_items(*)").order("created_at",{ascending:false});
+    const today = new Date(); today.setHours(0,0,0,0);
+    const { data: orders } = await getDB().from("orders").select("*, order_items(*)").gte("created_at",today.toISOString()).order("created_at",{ascending:false});
     const paidIds = (orders||[]).filter((o:Order)=>o.status==="pagado").map((o:Order)=>o.id);
     const pb = {efectivo:0,tarjeta:0,transferencia:0};
     if (paidIds.length) {
