@@ -79,6 +79,7 @@ export default function App() {
   const [profile, setProfile] = useState<Profile|null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [screen, setScreen] = useState("waiter");
+  const goTo = (s: string) => { localStorage.setItem("cabane_screen", s); setScreen(s); };
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
   const [loginErr, setLoginErr] = useState("");
@@ -140,7 +141,9 @@ export default function App() {
     if (error || !data) { await getDB().auth.signOut(); setAuthLoading(false); return; }
     const p = data as Profile;
     setProfile(p);
-    setScreen(ROLE_SCREENS[p.role][0]);
+    const saved = localStorage.getItem("cabane_screen");
+    const allowed = ROLE_SCREENS[p.role];
+    setScreen(saved && allowed.includes(saved) ? saved : allowed[0]);
     setAuthLoading(false);
   }
 
@@ -566,7 +569,7 @@ export default function App() {
       {screens.length>1 && (
         <nav style={{background:DARK,padding:"0 12px 10px",display:"flex",gap:6}}>
           {screens.map(s=>(
-            <button key={s} onClick={()=>setScreen(s)} style={{flex:1,padding:"9px",borderRadius:10,fontWeight:700,fontSize:13,border:"none",cursor:"pointer",fontFamily:FONT,
+            <button key={s} onClick={()=>goTo(s)} style={{flex:1,padding:"9px",borderRadius:10,fontWeight:700,fontSize:13,border:"none",cursor:"pointer",fontFamily:FONT,
               background:screen===s?RED:"rgba(255,255,255,0.07)",color:screen===s?"#fff":"rgba(255,255,255,0.5)"}}>
               {SL[s]}
             </button>
