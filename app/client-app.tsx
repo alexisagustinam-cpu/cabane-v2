@@ -901,13 +901,13 @@ export default function App() {
               })()}
 
               {(()=>{
-                const overdue=cOrders.filter(o=>o.status==="listo"&&(Date.now()-new Date(o.created_at).getTime())>15*60*1000);
+                const overdue=cOrders.filter(o=>o.status==="listo"&&(Date.now()-new Date(o.created_at).getTime())>20*60*1000);
                 return overdue.length>0?(
                   <div style={{background:"#FEF3C7",border:"2px solid #D97706",borderRadius:12,padding:"12px 16px",marginBottom:14,display:"flex",alignItems:"center",gap:10}}>
                     <span style={{fontSize:20}}>⚠️</span>
                     <div>
                       <p style={{fontSize:14,fontWeight:900,color:"#92400E",margin:0}}>
-                        {overdue.length} {overdue.length===1?"pedido listo lleva":"pedidos listos llevan"} más de 15 min sin cobrar
+                        {overdue.length} {overdue.length===1?"pedido listo lleva":"pedidos listos llevan"} más de 20 min sin cobrar
                       </p>
                       <p style={{fontSize:12,fontWeight:600,color:"#B45309",margin:0}}>
                         {overdue.map(o=>o.table_label).join(" · ")}
