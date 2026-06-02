@@ -248,23 +248,32 @@ export default function App() {
     const monthStart = new Date(now.getFullYear(),now.getMonth(),1).toISOString();
     const start = adminPeriod==="day" ? todayStart : monthStart;
 
-    const [{ data: _orders }, { data: payments }, { data: items }] = await Promise.all([
-      getDB().from("orders").select("id,total").eq("status","pagado").gte("created_at",start),
-      getDB().from("payments").select("method,amount").gte("created_at",start),
+    const [{ data: periodOrders }, { data: items }, { data: todayOrdersData }, { data: monthOrdersData }] = await Promise.all([
+      getDB().from("orders").select("id,total,created_at").eq("status","pagado").gte("created_at",start),
       getDB().from("order_items").select("product_name,quantity,unit_price,orders!inner(status,created_at)")
         .eq("orders.status","pagado").gte("orders.created_at",start),
+      getDB().from("orders").select("id,total,created_at").eq("status","pagado").gte("created_at",todayStart),
+      getDB().from("orders").select("id,total").eq("status","pagado").gte("created_at",monthStart),
     ]);
 
-    const todayOrders = await getDB().from("orders").select("id,total,created_at").eq("status","pagado").gte("created_at",todayStart);
-    const monthOrders = await getDB().from("orders").select("id,total").eq("status","pagado").gte("created_at",monthStart);
+    // payments no tiene created_at — filtrar por order_id de los pedidos del período
+    const periodIds = (periodOrders||[]).map((o:{id:string})=>o.id);
+    const pMap: Record<string,number> = {efectivo:0,tarjeta:0,transferencia:0};
+    if (periodIds.length) {
+      const { data: payments } = await getDB().from("payments").select("order_id,method,amount").in("order_id",periodIds);
+      const seen = new Set<string>();
+      (payments||[]).forEach((p:{order_id:string;method:string;amount:number}) => {
+        if (seen.has(p.order_id)) return;
+        seen.add(p.order_id);
+        if (p.method in pMap) pMap[p.method] += p.amount;
+      });
+    }
+
     const hourlyData = Array(24).fill(0);
-    (todayOrders.data||[]).forEach((o:{total:number;created_at:string}) => {
+    (todayOrdersData||[]).forEach((o:{total:number;created_at:string}) => {
       const h = new Date(o.created_at).getHours();
       hourlyData[h] += o.total;
     });
-
-    const pMap: Record<string,number> = {efectivo:0,tarjeta:0,transferencia:0};
-    (payments||[]).forEach((p: {method:string;amount:number}) => { if(p.method in pMap) pMap[p.method]+=p.amount; });
 
     const prodMap: Record<string,{qty:number;revenue:number}> = {};
     (items||[]).forEach((i: {product_name:string;quantity:number;unit_price:number}) => {
@@ -277,10 +286,10 @@ export default function App() {
       .sort((a,b)=>b.revenue-a.revenue).slice(0,10);
 
     setAdminStats({
-      todayRevenue:(todayOrders.data||[]).reduce((s:number,o:{total:number})=>s+o.total,0),
-      monthRevenue:(monthOrders.data||[]).reduce((s:number,o:{total:number})=>s+o.total,0),
-      todayCount:(todayOrders.data||[]).length,
-      monthCount:(monthOrders.data||[]).length,
+      todayRevenue:(todayOrdersData||[]).reduce((s:number,o:{total:number})=>s+o.total,0),
+      monthRevenue:(monthOrdersData||[]).reduce((s:number,o:{total:number})=>s+o.total,0),
+      todayCount:(todayOrdersData||[]).length,
+      monthCount:(monthOrdersData||[]).length,
       topProducts,
       payBreakdown:pMap as AdminStats["payBreakdown"],
       hourlyData,
