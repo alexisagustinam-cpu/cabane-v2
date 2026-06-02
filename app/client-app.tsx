@@ -103,7 +103,9 @@ export default function App() {
   const [splitAmounts, setSplitAmounts] = useState({efectivo:"",tarjeta:"",transferencia:""});
   const [adminStats, setAdminStats] = useState<AdminStats|null>(null);
   const [adminProducts, setAdminProducts] = useState<Product[]>([]);
-  const [adminSection, setAdminSection] = useState<"stats"|"products">("stats");
+  const [adminSection, setAdminSection] = useState<"stats"|"products"|"notes">("stats");
+  const [notesBycat, setNotesByCat] = useState<Record<string,{id:string;note:string}[]>>({});
+  const [newNote, setNewNote] = useState({category:CAT_ORDER[0],note:""});
   const [adminPeriod, setAdminPeriod] = useState<"day"|"month">("day");
   const [adminLoading, setAdminLoading] = useState(false);
   const [newProd, setNewProd] = useState({name:"",category:CAT_ORDER[0],price:""});
@@ -154,12 +156,37 @@ export default function App() {
     setProfile(null); setSession(null); setCart({});
   }
 
+  async function loadNotes() {
+    const { data } = await getDB().from("category_notes").select("id,category,note").order("category").order("note");
+    const map: Record<string,{id:string;note:string}[]> = {};
+    (data||[]).forEach((r:{id:string;category:string;note:string}) => {
+      if (!map[r.category]) map[r.category] = [];
+      map[r.category].push({id:r.id, note:r.note});
+    });
+    setNotesByCat(map);
+  }
+
+  async function addNote() {
+    if (!newNote.note.trim()) return;
+    await getDB().from("category_notes").insert({category:newNote.category, note:newNote.note.trim()});
+    setNewNote(n=>({...n,note:""}));
+    loadNotes();
+  }
+
+  async function deleteNote(id:string) {
+    await getDB().from("category_notes").delete().eq("id",id);
+    loadNotes();
+  }
+
   useEffect(() => {
-    if (screen==="waiter" && products.length===0 && profile) {
-      getDB().from("products").select("*").eq("is_active",true).order("category")
-        .then(({ data }: { data: Product[]|null }) => {
-          const p = data||[]; setProducts(p); if (p.length) setCat(p[0].category);
-        });
+    if (screen==="waiter" && profile) {
+      if (products.length===0) {
+        getDB().from("products").select("*").eq("is_active",true).order("category")
+          .then(({ data }: { data: Product[]|null }) => {
+            const p = data||[]; setProducts(p); if (p.length) setCat(p[0].category);
+          });
+      }
+      if (Object.keys(notesBycat).length===0) loadNotes();
     }
   }, [screen, products.length, profile]);
 
@@ -204,7 +231,7 @@ export default function App() {
   useEffect(() => {
     if (screen==="kitchen") loadKitchen();
     if (screen==="cashier") loadCashier();
-    if (screen==="admin") { loadAdminStats(); loadAdminProducts(); }
+    if (screen==="admin") { loadAdminStats(); loadAdminProducts(); loadNotes(); }
   }, [screen, loadKitchen, loadCashier]);
 
   // Realtime caja
@@ -717,7 +744,7 @@ export default function App() {
                         <div style={{borderTop:`1px solid ${BORDER}`,paddingTop:10}}>
                           {/* Quick note chips */}
                           <div style={{display:"flex",gap:6,flexWrap:"wrap" as const,marginBottom:8}}>
-                            {(NOTES_BY_CAT[p.category]||[]).map(n=>{
+                            {(notesBycat[p.category]||[]).map(({note:n})=>{
                               const active = cart[p.id]?.notes.includes(n);
                               return (
                                 <button key={n} onClick={()=>toggleNote(p.id,n)} style={{
@@ -1045,6 +1072,7 @@ export default function App() {
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>{setAdminSection("stats");loadAdminStats();}} style={{...btn(adminSection==="stats"?RED:CREAM2, adminSection==="stats"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Reportes</button>
               <button onClick={()=>{setAdminSection("products");loadAdminProducts();}} style={{...btn(adminSection==="products"?RED:CREAM2, adminSection==="products"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Productos</button>
+              <button onClick={()=>{setAdminSection("notes");loadNotes();}} style={{...btn(adminSection==="notes"?RED:CREAM2, adminSection==="notes"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Notas</button>
             </div>
           </div>
 
@@ -1175,6 +1203,60 @@ export default function App() {
                     </div>
                   ))}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {adminSection==="notes" && (
+            <div>
+              {/* Agregar nota */}
+              <div style={{...card,padding:16,marginBottom:20}}>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar nota / extra</p>
+                <select value={newNote.category} onChange={e=>setNewNote(n=>({...n,category:e.target.value}))}
+                  style={{width:"100%",padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none",marginBottom:10}}>
+                  {CAT_ORDER.map(c=><option key={c} value={c}>{c}</option>)}
+                </select>
+                <div style={{display:"flex",gap:8}}>
+                  <input placeholder="Ej: Sin picante, Extra queso..." value={newNote.note}
+                    onChange={e=>setNewNote(n=>({...n,note:e.target.value}))}
+                    onKeyDown={e=>e.key==="Enter"&&addNote()}
+                    style={{flex:1,padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                  <button onClick={addNote} disabled={!newNote.note.trim()}
+                    style={{...btn(RED,"#fff",!newNote.note.trim()),padding:"0 20px",height:48,whiteSpace:"nowrap" as const}}>
+                    Agregar
+                  </button>
+                </div>
+              </div>
+
+              {/* Lista por categoría */}
+              <div style={{...card,padding:16}}>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Notas por categoría</p>
+                {CAT_ORDER.map(cat=>{
+                  const notes = notesBycat[cat]||[];
+                  return (
+                    <div key={cat} style={{marginBottom:16}}>
+                      <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:8}}>
+                        {cat} <span style={{fontWeight:600,opacity:0.6}}>({notes.length})</span>
+                      </p>
+                      {notes.length===0 ? (
+                        <p style={{fontSize:13,color:MUTED,fontWeight:600,padding:"8px 0"}}>Sin notas — agrega la primera arriba</p>
+                      ) : (
+                        <div style={{display:"flex",flexWrap:"wrap" as const,gap:8}}>
+                          {notes.map(({id,note})=>(
+                            <div key={id} style={{display:"flex",alignItems:"center",gap:6,background:CREAM,borderRadius:20,padding:"6px 10px 6px 14px",border:`1px solid ${BORDER}`}}>
+                              <span style={{fontSize:13,fontWeight:700,color:DARK}}>{note}</span>
+                              <button onClick={()=>deleteNote(id)}
+                                style={{width:22,height:22,borderRadius:"50%",background:"rgba(122,30,58,0.12)",border:"none",cursor:"pointer",
+                                  fontWeight:900,fontSize:13,color:RED,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,flexShrink:0}}>
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
