@@ -99,6 +99,8 @@ export default function App() {
   const [cLoading, setCLoading] = useState(false);
   const [paying, setPaying] = useState<string|null>(null);
   const [expandedOrder, setExpandedOrder] = useState<string|null>(null);
+  const [splitModal, setSplitModal] = useState<Order|null>(null);
+  const [splitAmounts, setSplitAmounts] = useState({efectivo:"",tarjeta:"",transferencia:""});
   const [adminStats, setAdminStats] = useState<AdminStats|null>(null);
   const [adminProducts, setAdminProducts] = useState<Product[]>([]);
   const [adminSection, setAdminSection] = useState<"stats"|"products">("stats");
@@ -373,6 +375,20 @@ export default function App() {
     setCPayBreakdown((prev:{efectivo:number;tarjeta:number;transferencia:number})=>({...prev,[method]:(prev[method as keyof typeof prev]||0)+amount}));
     await getDB().from("payments").insert({order_id:id,method,amount});
     await getDB().from("orders").update({status:"pagado"}).eq("id",id);
+    setPaying(null);
+  }
+
+  async function cobrarSplit(order: Order, parts: {method:string; amount:number}[]) {
+    setPaying(order.id);
+    setSplitModal(null);
+    setCOrders((prev:Order[])=>prev.map(o=>o.id===order.id?{...o,status:"pagado"}:o));
+    setCPayBreakdown((prev:{efectivo:number;tarjeta:number;transferencia:number})=>{
+      const next = {...prev};
+      parts.forEach(p=>{ next[p.method as keyof typeof next] = (next[p.method as keyof typeof next]||0) + p.amount; });
+      return next;
+    });
+    await Promise.all(parts.map(p=>getDB().from("payments").insert({order_id:order.id,method:p.method,amount:p.amount})));
+    await getDB().from("orders").update({status:"pagado"}).eq("id",order.id);
     setPaying(null);
   }
 
@@ -884,6 +900,23 @@ export default function App() {
                 );
               })()}
 
+              {(()=>{
+                const overdue=cOrders.filter(o=>o.status==="listo"&&(Date.now()-new Date(o.created_at).getTime())>15*60*1000);
+                return overdue.length>0?(
+                  <div style={{background:"#FEF3C7",border:"2px solid #D97706",borderRadius:12,padding:"12px 16px",marginBottom:14,display:"flex",alignItems:"center",gap:10}}>
+                    <span style={{fontSize:20}}>⚠️</span>
+                    <div>
+                      <p style={{fontSize:14,fontWeight:900,color:"#92400E",margin:0}}>
+                        {overdue.length} {overdue.length===1?"pedido listo lleva":"pedidos listos llevan"} más de 15 min sin cobrar
+                      </p>
+                      <p style={{fontSize:12,fontWeight:600,color:"#B45309",margin:0}}>
+                        {overdue.map(o=>o.table_label).join(" · ")}
+                      </p>
+                    </div>
+                  </div>
+                ):null;
+              })()}
+
               {cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado").length===0&&!cLoading ? (
                 <div style={{textAlign:"center" as const,padding:"60px 20px"}}>
                   <p style={{fontWeight:800,fontSize:20,color:MUTED}}>Sin pedidos pendientes</p>
@@ -933,11 +966,15 @@ export default function App() {
                         const fgs={efectivo:"#fff",tarjeta:"#fff",transferencia:DARK};
                         return (
                           <button key={m} disabled={!canPay||busy} onClick={()=>cobrar(o.id,m,o.total)}
-                            style={{...btn(bgs[m],fgs[m],!canPay||busy),flex:1,minWidth:110,height:50,fontSize:13}}>
+                            style={{...btn(bgs[m],fgs[m],!canPay||busy),flex:1,minWidth:100,height:50,fontSize:13}}>
                             {busy?"Guardando…":labels[m]}
                           </button>
                         );
                       })}
+                      <button disabled={!canPay||busy} onClick={()=>{setSplitModal(o);setSplitAmounts({efectivo:"",tarjeta:"",transferencia:""});}}
+                        style={{...btn(CREAM2,DARK,!canPay||busy),flex:1,minWidth:100,height:50,fontSize:13,border:`1px solid ${BORDER}`}}>
+                        Dividir
+                      </button>
                     </div>
                   </div>
                 );
@@ -1136,6 +1173,68 @@ export default function App() {
       )}
 
       {/* ── MODAL CONFIRMAR ────────────────────────────────────── */}
+      {splitModal && (
+        <div onClick={e=>{if(e.target===e.currentTarget)setSplitModal(null)}}
+          style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
+          <div style={{...card,padding:20,width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+              <div>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Pago dividido</p>
+                <p style={{fontSize:22,fontWeight:900,color:DARK}}>{splitModal.table_label}</p>
+                <p style={{fontSize:14,fontWeight:700,color:RED,marginTop:4}}>Total: {$(splitModal.total)}</p>
+              </div>
+              <button onClick={()=>setSplitModal(null)}
+                style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
+            </div>
+
+            <p style={{fontSize:13,fontWeight:600,color:MUTED,marginBottom:12}}>Ingresa cuánto paga con cada método. La suma debe ser igual al total.</p>
+
+            {(["efectivo","tarjeta","transferencia"] as const).map(m=>{
+              const labels={efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia"};
+              const bgs={efectivo:DARK,tarjeta:RED,transferencia:GOLD};
+              const fgs={efectivo:"#fff",tarjeta:"#fff",transferencia:DARK};
+              return (
+                <div key={m} style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                  <div style={{background:bgs[m],borderRadius:8,padding:"6px 12px",minWidth:110}}>
+                    <span style={{fontSize:13,fontWeight:700,color:fgs[m]}}>{labels[m]}</span>
+                  </div>
+                  <input type="number" min="0" step="0.01" placeholder="0.00"
+                    value={splitAmounts[m]}
+                    onChange={e=>setSplitAmounts(p=>({...p,[m]:e.target.value}))}
+                    style={{flex:1,height:44,borderRadius:10,border:`1px solid ${BORDER}`,padding:"0 12px",fontSize:16,fontWeight:700,fontFamily:FONT,color:DARK,background:"#fff"}}/>
+                </div>
+              );
+            })}
+
+            {(()=>{
+              const sum=["efectivo","tarjeta","transferencia"].reduce((s,m)=>s+(parseFloat(splitAmounts[m as keyof typeof splitAmounts])||0),0);
+              const diff=Math.round((splitModal.total-sum)*100)/100;
+              const ok=Math.abs(diff)<0.01;
+              return (
+                <>
+                  <div style={{display:"flex",justifyContent:"space-between",background:ok?GREEN:CREAM2,borderRadius:10,padding:"10px 14px",marginTop:6,marginBottom:14}}>
+                    <span style={{fontSize:13,fontWeight:700,color:ok?"#fff":MUTED}}>
+                      {ok?"Suma correcta":diff>0?`Faltan ${$(diff)}`:`Excede ${$(-diff)}`}
+                    </span>
+                    <span style={{fontSize:15,fontWeight:900,color:ok?"#fff":DARK}}>{$(sum)} / {$(splitModal.total)}</span>
+                  </div>
+                  <button disabled={!ok||paying===splitModal.id}
+                    onClick={()=>{
+                      const parts=(["efectivo","tarjeta","transferencia"] as const)
+                        .map(m=>({method:m,amount:parseFloat(splitAmounts[m])||0}))
+                        .filter(p=>p.amount>0);
+                      cobrarSplit(splitModal,parts);
+                    }}
+                    style={{...btn(RED,"#fff",!ok||paying===splitModal.id),width:"100%",height:54,fontSize:16}}>
+                    {paying===splitModal.id?"Guardando…":"Confirmar pago dividido"}
+                  </button>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
       {modal && (
         <div onClick={e=>{if(e.target===e.currentTarget)setModal(false)}}
           style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
