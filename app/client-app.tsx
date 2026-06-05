@@ -216,8 +216,12 @@ export default function App() {
   const loadCashier = useCallback(async () => {
     setCLoading(true);
     const today = new Date(); today.setHours(0,0,0,0);
-    const { data: orders } = await getDB().from("orders").select("*, order_items(*)").gte("created_at",today.toISOString()).order("created_at",{ascending:false});
-    const paidIds = (orders||[]).filter((o:Order)=>o.status==="pagado").map((o:Order)=>o.id);
+    // Pedidos abiertos: sin filtro de fecha (pueden venir de días anteriores)
+    const { data: openOrders } = await getDB().from("orders").select("*, order_items(*)").in("status",["enviado","preparando","listo"]).order("created_at",{ascending:false});
+    // Pedidos pagados hoy: solo para el resumen del día
+    const { data: paidToday } = await getDB().from("orders").select("*, order_items(*)").eq("status","pagado").gte("created_at",today.toISOString()).order("created_at",{ascending:false});
+    const orders = [...(openOrders||[]), ...(paidToday||[])];
+    const paidIds = (paidToday||[]).map((o:Order)=>o.id);
     const pb = {efectivo:0,tarjeta:0,transferencia:0};
     if (paidIds.length) {
       const { data: payments } = await getDB().from("payments").select("order_id,method,amount").in("order_id",paidIds);
