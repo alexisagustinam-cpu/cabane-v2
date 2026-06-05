@@ -13,9 +13,9 @@ function getDB(): any {
 type Role = "waiter" | "kitchen" | "cashier" | "admin";
 type Status = "enviado" | "preparando" | "listo" | "pagado" | "cancelado";
 interface Profile { id: string; name: string; role: Role }
-interface Product { id: string; name: string; category: string; price: number }
+interface Product { id: string; name: string; category: string; price: number; description?: string }
 interface OrderItem { id: string; product_name: string; quantity: number; unit_price: number; notes?: string }
-interface Order { id: string; order_number: number; table_label: string; status: Status; total: number; created_at: string; order_items?: OrderItem[] }
+interface Order { id: string; order_number: number; table_label: string; status: Status; total: number; created_at: string; table_note?: string; order_items?: OrderItem[] }
 interface CartItem extends Product { qty: number; notes: string[]; customNote: string }
 interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[] }
 
@@ -40,7 +40,7 @@ function elapsed(created_at: string): string {
 }
 
 const $ = (n: number) => `$${n.toFixed(2)}`;
-const MESAS = ["Mesa 1","Mesa 2","Mesa 3","Mesa 4","Para llevar","Delivery"];
+const MESAS = ["Mesa 0","Mesa 1","Mesa 2","Mesa 3","Mesa 4","Mesa 5","Mesa 6","Mesa 7","Mesa 8","Mesa 9","Para llevar","Delivery"];
 const CAT_ORDER = ["Sánduches","Desayunos","Clásicos","Ensaladas","Tablitas","Para Compartir","Bebidas","Cafés","Postres"];
 const NOTES_BY_CAT: Record<string, string[]> = {
   "Sánduches":      ["Sin cebolla","Sin mayonesa","Sin tomate","Sin lechuga","Sin pepinillo","Extra queso","Extra salsa","Bien tostado","Sin picante"],
@@ -109,7 +109,9 @@ export default function App() {
   const [newNote, setNewNote] = useState({category:CAT_ORDER[0],note:""});
   const [adminPeriod, setAdminPeriod] = useState<"day"|"month">("day");
   const [adminLoading, setAdminLoading] = useState(false);
-  const [newProd, setNewProd] = useState({name:"",category:CAT_ORDER[0],price:""});
+  const [newProd, setNewProd] = useState({name:"",category:CAT_ORDER[0],price:"",description:""});
+  const [tableNote, setTableNote] = useState("");
+  const [expandedDesc, setExpandedDesc] = useState<string|null>(null);
   const [tick, setTick] = useState(0);
   const [kSummary, setKSummary] = useState<{name:string;qty:number}[]>([]);
   const styleRef = useRef(false);
@@ -334,7 +336,7 @@ export default function App() {
 
   async function addProduct() {
     if (!newProd.name||!newProd.price) return;
-    await getDB().from("products").insert({name:newProd.name,category:newProd.category,price:parseFloat(newProd.price),is_active:true});
+    await getDB().from("products").insert({name:newProd.name,category:newProd.category,price:parseFloat(newProd.price),is_active:true,description:newProd.description||null});
     setNewProd({name:"",category:CAT_ORDER[0],price:""});
     loadAdminProducts();
   }
@@ -378,7 +380,7 @@ export default function App() {
     const total = items.reduce((s,i)=>s+i.price*i.qty,0);
     setSending(true);
     try {
-      const { data: order, error }: { data: Order|null; error: unknown } = await getDB().from("orders").insert({table_label:mesa,status:"enviado",total}).select().single();
+      const { data: order, error }: { data: Order|null; error: unknown } = await getDB().from("orders").insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null}).select().single();
       if (error||!order) { setSentMsg("Error al enviar. Revisa tu conexión e intenta de nuevo."); setSending(false); return; }
       const { error: itemsError } = await getDB().from("order_items").insert(items.map((i:CartItem)=>({
         order_id:order.id, product_id:i.id, product_name:i.name,
@@ -386,7 +388,7 @@ export default function App() {
         notes:[...i.notes, i.customNote].filter(Boolean).join(", ")||null
       })));
       if (itemsError) { setSentMsg("Pedido creado pero hubo un error con los items. Avisa al admin."); setSending(false); return; }
-      setCart({}); setModal(false);
+      setCart({}); setModal(false); setTableNote("");
       setSentMsg(`Pedido #${order.order_number} confirmado — cocina ya lo recibió`);
       setTimeout(()=>setSentMsg(""),5000);
     } catch(_) {
@@ -715,7 +717,20 @@ export default function App() {
                       {/* Top row: name + price + add button */}
                       <div style={{display:"flex",alignItems:"center",gap:12}}>
                         <div style={{flex:1,minWidth:0}}>
-                          <p style={{fontSize:17,fontWeight:800,color:DARK,lineHeight:1.2,marginBottom:3}}>{p.name}</p>
+                          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
+                            <p style={{fontSize:17,fontWeight:800,color:DARK,lineHeight:1.2}}>{p.name}</p>
+                            {p.description && (
+                              <button onClick={()=>setExpandedDesc(expandedDesc===p.id?null:p.id)}
+                                style={{flexShrink:0,width:20,height:20,borderRadius:"50%",background:CREAM2,border:"none",
+                                  cursor:"pointer",fontSize:11,fontWeight:900,color:MUTED,fontFamily:FONT,
+                                  display:"flex",alignItems:"center",justifyContent:"center"}}>
+                                ?
+                              </button>
+                            )}
+                          </div>
+                          {expandedDesc===p.id && p.description && (
+                            <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:4,lineHeight:1.4}}>{p.description}</p>
+                          )}
                           <p style={{fontSize:20,fontWeight:900,color:RED,lineHeight:1}}>{$(p.price)}</p>
                         </div>
 
@@ -862,6 +877,7 @@ export default function App() {
                       <div>
                         <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:2}}>#{o.order_number} · {time} · <span style={{color:mins>=15?RED:mins>=8?GOLD:GREEN,fontWeight:800}}>{elapsed(o.created_at)}</span></p>
                         <p style={{fontSize:22,fontWeight:900,color:DARK}}>{o.table_label}</p>
+                        {o.table_note && <p style={{fontSize:12,fontWeight:700,color:DARK,background:GOLD,borderRadius:6,padding:"3px 8px",marginTop:4,display:"inline-block"}}>Nota mesa: {o.table_note}</p>}
                       </div>
                       <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Prep.":"Listo"}</span>
                     </div>
@@ -1174,6 +1190,10 @@ export default function App() {
                   style={{width:"100%",padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none",marginBottom:10}}>
                   {CAT_ORDER.map(c=><option key={c} value={c}>{c}</option>)}
                 </select>
+                <textarea placeholder="Descripción (opcional) — ej: Pan artesanal, pollo a la plancha, queso gouda, lechuga y tomate"
+                  value={newProd.description} onChange={e=>setNewProd(p=>({...p,description:e.target.value}))}
+                  rows={2} style={{width:"100%",padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,
+                    fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none",marginBottom:10,resize:"vertical" as const}}/>
                 <button onClick={addProduct} disabled={!newProd.name||!newProd.price}
                   style={{...btn(RED,"#fff",!newProd.name||!newProd.price),width:"100%",height:48}}>
                   Agregar producto
@@ -1359,10 +1379,15 @@ export default function App() {
               })}
             </div>
 
-            <div style={{background:DARK,borderRadius:12,padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <div style={{background:DARK,borderRadius:12,padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
               <span style={{fontSize:14,color:"rgba(255,255,255,0.5)",fontWeight:600}}>Total a cobrar</span>
               <span style={{fontSize:24,fontWeight:900,color:GOLD}}>{$(cartTotal)}</span>
             </div>
+
+            <input type="text" placeholder="Nota de mesa (opcional) — ej: alérgico al gluten, misma cuenta…"
+              value={tableNote} onChange={e=>setTableNote(e.target.value)}
+              style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,
+                fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none",marginBottom:12}}/>
 
             <div style={{display:"grid",gridTemplateColumns:"1fr 1.6fr",gap:10}}>
               <button onClick={()=>setModal(false)} style={{...btn(CREAM2,DARK),height:52}}>Editar</button>
