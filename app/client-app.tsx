@@ -337,7 +337,7 @@ export default function App() {
   async function addProduct() {
     if (!newProd.name||!newProd.price) return;
     await getDB().from("products").insert({name:newProd.name,category:newProd.category,price:parseFloat(newProd.price),is_active:true,description:newProd.description||null});
-    setNewProd({name:"",category:CAT_ORDER[0],price:""});
+    setNewProd({name:"",category:CAT_ORDER[0],price:"",description:""});
     loadAdminProducts();
   }
 
