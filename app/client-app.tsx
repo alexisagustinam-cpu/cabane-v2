@@ -110,6 +110,7 @@ export default function App() {
   const [adminPeriod, setAdminPeriod] = useState<"day"|"month">("day");
   const [adminLoading, setAdminLoading] = useState(false);
   const [newProd, setNewProd] = useState({name:"",category:CAT_ORDER[0],price:"",description:""});
+  const [editProd, setEditProd] = useState<{id:string,name:string,category:string,price:string,description:string}|null>(null);
   const [tableNote, setTableNote] = useState("");
   const [expandedDesc, setExpandedDesc] = useState<string|null>(null);
   const [tick, setTick] = useState(0);
@@ -338,6 +339,13 @@ export default function App() {
     if (!newProd.name||!newProd.price) return;
     await getDB().from("products").insert({name:newProd.name,category:newProd.category,price:parseFloat(newProd.price),is_active:true,description:newProd.description||null});
     setNewProd({name:"",category:CAT_ORDER[0],price:"",description:""});
+    loadAdminProducts();
+  }
+
+  async function saveEditProd() {
+    if (!editProd||!editProd.name||!editProd.price) return;
+    await getDB().from("products").update({name:editProd.name,category:editProd.category,price:parseFloat(editProd.price),description:editProd.description||null}).eq("id",editProd.id);
+    setEditProd(null);
     loadAdminProducts();
   }
 
@@ -1208,19 +1216,47 @@ export default function App() {
                     <div key={cat}>
                       <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",padding:"8px 0 4px"}}>{cat}</p>
                       {adminProducts.filter(p=>p.category===cat).map(p=>(
-                        <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:CREAM,borderRadius:10,marginBottom:4,
-                          opacity:(p as Product & {is_active?:boolean}).is_active===false?0.5:1}}>
-                          <span style={{flex:1,fontSize:14,fontWeight:700,color:DARK}}>{p.name}</span>
-                          <span style={{fontSize:14,fontWeight:900,color:RED,minWidth:50,textAlign:"right" as const}}>{$(p.price)}</span>
-                          <button onClick={()=>toggleProduct(p.id,(p as Product & {is_active?:boolean}).is_active!==false)}
-                            style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
-                              background:(p as Product & {is_active?:boolean}).is_active===false?CREAM2:GREEN,color:(p as Product & {is_active?:boolean}).is_active===false?DARK:"#fff"}}>
-                            {(p as Product & {is_active?:boolean}).is_active===false?"Activar":"Activo"}
-                          </button>
-                          <button onClick={()=>deleteProduct(p.id)}
-                            style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
-                            Eliminar
-                          </button>
+                        <div key={p.id} style={{marginBottom:6}}>
+                          <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:CREAM,
+                            borderRadius:editProd?.id===p.id?"10px 10px 0 0":"10px",
+                            opacity:(p as Product & {is_active?:boolean}).is_active===false?0.5:1}}>
+                            <span style={{flex:1,fontSize:14,fontWeight:700,color:DARK}}>{p.name}</span>
+                            <span style={{fontSize:14,fontWeight:900,color:RED,minWidth:50,textAlign:"right" as const}}>{$(p.price)}</span>
+                            <button onClick={()=>setEditProd(editProd?.id===p.id?null:{id:p.id,name:p.name,category:p.category,price:String(p.price),description:p.description||""})}
+                              style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
+                                background:editProd?.id===p.id?GOLD:CREAM2,color:editProd?.id===p.id?"#fff":DARK}}>
+                              {editProd?.id===p.id?"Cerrar":"Editar"}
+                            </button>
+                            <button onClick={()=>toggleProduct(p.id,(p as Product & {is_active?:boolean}).is_active!==false)}
+                              style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
+                                background:(p as Product & {is_active?:boolean}).is_active===false?CREAM2:GREEN,color:(p as Product & {is_active?:boolean}).is_active===false?DARK:"#fff"}}>
+                              {(p as Product & {is_active?:boolean}).is_active===false?"Activar":"Activo"}
+                            </button>
+                            <button onClick={()=>deleteProduct(p.id)}
+                              style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
+                              Eliminar
+                            </button>
+                          </div>
+                          {editProd?.id===p.id && (
+                            <div style={{background:CARD,border:`1.5px solid ${BORDER}`,borderTop:"none",borderRadius:"0 0 10px 10px",padding:"12px 12px 14px"}}>
+                              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                                <input placeholder="Nombre" value={editProd.name} onChange={e=>setEditProd(ep=>ep?{...ep,name:e.target.value}:ep)}
+                                  style={{padding:"9px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                                <input placeholder="Precio" type="number" value={editProd.price} onChange={e=>setEditProd(ep=>ep?{...ep,price:e.target.value}:ep)}
+                                  style={{padding:"9px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                              </div>
+                              <select value={editProd.category} onChange={e=>setEditProd(ep=>ep?{...ep,category:e.target.value}:ep)}
+                                style={{width:"100%",padding:"9px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:8}}>
+                                {CAT_ORDER.map(c=><option key={c} value={c}>{c}</option>)}
+                              </select>
+                              <textarea placeholder="Descripción (opcional)" value={editProd.description} onChange={e=>setEditProd(ep=>ep?{...ep,description:e.target.value}:ep)}
+                                rows={2} style={{width:"100%",padding:"9px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",resize:"vertical" as const,marginBottom:10}}/>
+                              <button onClick={saveEditProd} disabled={!editProd.name||!editProd.price}
+                                style={{...btn(RED,"#fff",!editProd.name||!editProd.price),width:"100%",height:42,fontSize:13}}>
+                                Guardar cambios
+                              </button>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
