@@ -107,7 +107,9 @@ export default function App() {
   const [adminSection, setAdminSection] = useState<"stats"|"products"|"notes">("stats");
   const [notesBycat, setNotesByCat] = useState<Record<string,{id:string;note:string}[]>>({});
   const [newNote, setNewNote] = useState({category:CAT_ORDER[0],note:""});
-  const [adminPeriod, setAdminPeriod] = useState<"day"|"month">("day");
+  const [adminMode, setAdminMode] = useState<"day"|"month">("day");
+  const [adminDate, setAdminDate] = useState(()=>new Date().toISOString().slice(0,10));
+  const [adminMonth, setAdminMonth] = useState(()=>new Date().toISOString().slice(0,7));
   const [adminLoading, setAdminLoading] = useState(false);
   const [newProd, setNewProd] = useState({name:"",category:CAT_ORDER[0],price:"",description:""});
   const [editProd, setEditProd] = useState<{id:string,name:string,category:string,price:string,description:string}|null>(null);
@@ -280,17 +282,23 @@ export default function App() {
 
   async function loadAdminStats() {
     setAdminLoading(true);
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(),now.getMonth(),now.getDate()).toISOString();
-    const monthStart = new Date(now.getFullYear(),now.getMonth(),1).toISOString();
-    const start = adminPeriod==="day" ? todayStart : monthStart;
+    // Rango según modo seleccionado
+    let start: string, end: string;
+    if (adminMode==="day") {
+      const d = new Date(adminDate+"T00:00:00");
+      start = d.toISOString();
+      const de = new Date(adminDate+"T00:00:00"); de.setDate(de.getDate()+1);
+      end = de.toISOString();
+    } else {
+      const [y,m] = adminMonth.split("-").map(Number);
+      start = new Date(y,m-1,1).toISOString();
+      end = new Date(y,m,1).toISOString();
+    }
 
-    const [{ data: periodOrders }, { data: items }, { data: todayOrdersData }, { data: monthOrdersData }] = await Promise.all([
-      getDB().from("orders").select("id,total,created_at").eq("status","pagado").gte("created_at",start),
+    const [{ data: periodOrders }, { data: items }] = await Promise.all([
+      getDB().from("orders").select("id,total,created_at").eq("status","pagado").gte("created_at",start).lt("created_at",end),
       getDB().from("order_items").select("product_name,quantity,unit_price,orders!inner(status,created_at)")
-        .eq("orders.status","pagado").gte("orders.created_at",start),
-      getDB().from("orders").select("id,total,created_at").eq("status","pagado").gte("created_at",todayStart),
-      getDB().from("orders").select("id,total").eq("status","pagado").gte("created_at",monthStart),
+        .eq("orders.status","pagado").gte("orders.created_at",start).lt("orders.created_at",end),
     ]);
 
     // payments no tiene created_at — filtrar por order_id de los pedidos del período
@@ -307,7 +315,7 @@ export default function App() {
     }
 
     const hourlyData = Array(24).fill(0);
-    (todayOrdersData||[]).forEach((o:{total:number;created_at:string}) => {
+    (periodOrders||[]).forEach((o:{total:number;created_at:string}) => {
       const h = new Date(o.created_at).getHours();
       hourlyData[h] += o.total;
     });
@@ -322,11 +330,12 @@ export default function App() {
       .map(([name,v])=>({name,...v}))
       .sort((a,b)=>b.revenue-a.revenue).slice(0,10);
 
+    const total = (periodOrders||[]).reduce((s:number,o:{total:number})=>s+o.total,0);
     setAdminStats({
-      todayRevenue:(todayOrdersData||[]).reduce((s:number,o:{total:number})=>s+o.total,0),
-      monthRevenue:(monthOrdersData||[]).reduce((s:number,o:{total:number})=>s+o.total,0),
-      todayCount:(todayOrdersData||[]).length,
-      monthCount:(monthOrdersData||[]).length,
+      todayRevenue: total,
+      monthRevenue: total,
+      todayCount:(periodOrders||[]).length,
+      monthCount:(periodOrders||[]).length,
       topProducts,
       payBreakdown:pMap as AdminStats["payBreakdown"],
       hourlyData,
@@ -1110,20 +1119,23 @@ export default function App() {
           {adminSection==="stats" && (
             <div>
               {/* Selector período */}
-              <div style={{display:"flex",gap:8,marginBottom:16}}>
-                {(["day","month"] as const).map(p=>(
-                  <button key={p} onClick={()=>{setAdminPeriod(p);}} style={{...btn(adminPeriod===p?RED:CREAM2,adminPeriod===p?"#fff":DARK),height:38,padding:"0 20px",fontSize:13}}>
-                    {p==="day"?"Hoy":"Este mes"}
-                  </button>
-                ))}
+              <div style={{display:"flex",flexWrap:"wrap" as const,gap:8,marginBottom:16,alignItems:"center"}}>
+                <button onClick={()=>setAdminMode("day")} style={{...btn(adminMode==="day"?RED:CREAM2,adminMode==="day"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por día</button>
+                <button onClick={()=>setAdminMode("month")} style={{...btn(adminMode==="month"?RED:CREAM2,adminMode==="month"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por mes</button>
+                {adminMode==="day"
+                  ? <input type="date" value={adminDate} onChange={e=>setAdminDate(e.target.value)}
+                      style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                  : <input type="month" value={adminMonth} onChange={e=>setAdminMonth(e.target.value)}
+                      style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                }
                 <button onClick={loadAdminStats} style={{...btn(CREAM2,DARK),height:38,padding:"0 16px",fontSize:13}}>{adminLoading?"Cargando…":"↻"}</button>
               </div>
 
               {/* Métricas principales */}
               <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:20}}>
                 {[
-                  {v:$(adminPeriod==="day"?adminStats?.todayRevenue||0:adminStats?.monthRevenue||0),l:adminPeriod==="day"?"Facturado hoy":"Facturado este mes",bg:RED,fg:"#fff"},
-                  {v:String(adminPeriod==="day"?adminStats?.todayCount||0:adminStats?.monthCount||0),l:"Pedidos",bg:DARK,fg:"#fff"},
+                  {v:$(adminStats?.todayRevenue||0),l:adminMode==="day"?`Facturado el ${adminDate}`:`Facturado en ${adminMonth}`,bg:RED,fg:"#fff"},
+                  {v:String(adminStats?.todayCount||0),l:"Pedidos",bg:DARK,fg:"#fff"},
                   {v:$(adminStats?.payBreakdown.efectivo||0),l:"Efectivo",bg:GOLD,fg:DARK},
                   {v:$(adminStats?.payBreakdown.tarjeta||0),l:"Tarjeta",bg:GREEN,fg:"#fff"},
                 ].map(({v,l,bg,fg})=>(
