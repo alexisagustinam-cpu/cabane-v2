@@ -1385,6 +1385,24 @@ export default function App() {
                   const low = ingredients.filter(i=>i.stock_current >= i.stock_min && i.stock_current < i.stock_min*2);
                   const ok = ingredients.filter(i=>i.stock_current >= i.stock_min*2);
                   const sorted = [...critical, ...low, ...ok];
+
+                  const sendWhatsApp = (mode:"critical"|"critical+low"|"all") => {
+                    const date = new Date().toLocaleDateString("es-EC",{day:"2-digit",month:"2-digit",year:"numeric"});
+                    let text = `🛒 *Lista de compras — Cabane Sandwiches*\n📅 ${date}\n\n`;
+                    const toSend = mode==="critical" ? critical : mode==="critical+low" ? [...critical,...low] : sorted.filter(i=>i.stock_current < i.stock_min*2);
+                    if (critical.length && (mode==="critical"||mode==="critical+low"||mode==="all")) {
+                      const list = (mode==="critical"?critical:critical).filter(i=>toSend.includes(i));
+                      if (list.length) { text += `🔴 *URGENTE — Reponer ya:*\n`; list.forEach(i=>{text+=`• ${i.name}: ${i.stock_current} ${i.unit} (mín ${i.stock_min})\n`;}); text+="\n"; }
+                    }
+                    if (low.length && mode!=="critical") {
+                      const list = low.filter(i=>toSend.includes(i));
+                      if (list.length) { text += `🟡 *Stock bajo:*\n`; list.forEach(i=>{text+=`• ${i.name}: ${i.stock_current} ${i.unit} (mín ${i.stock_min})\n`;}); text+="\n"; }
+                    }
+                    if (mode==="all" && ok.length) { text += `✅ *OK:*\n`; ok.forEach(i=>{text+=`• ${i.name}: ${i.stock_current} ${i.unit}\n`;}); text+="\n"; }
+                    text += `_Enviado desde el sistema de Cabane_`;
+                    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`,"_blank");
+                  };
+
                   return (
                     <div>
                       {/* Tarjetas resumen */}
@@ -1405,9 +1423,34 @@ export default function App() {
                       {critical.length>0 && (
                         <div style={{background:"#FFEBEE",border:"1.5px solid #C62828",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}>
                           <span style={{fontSize:18}}>⚠️</span>
-                          <span style={{fontSize:13,fontWeight:700,color:"#C62828"}}>
+                          <span style={{fontSize:13,fontWeight:700,color:"#C62828",flex:1}}>
                             {critical.length} ingrediente{critical.length>1?"s":""} agotado{critical.length>1?"s":""}: {critical.map(i=>i.name).join(", ")}
                           </span>
+                        </div>
+                      )}
+
+                      {/* Enviar por WhatsApp */}
+                      {(critical.length>0||low.length>0) && (
+                        <div style={{...card,padding:14,marginBottom:16}}>
+                          <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:10}}>Enviar lista por WhatsApp</p>
+                          <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
+                            {critical.length>0 && (
+                              <button onClick={()=>sendWhatsApp("critical")}
+                                style={{display:"flex",alignItems:"center",gap:6,padding:"8px 14px",borderRadius:10,border:"none",cursor:"pointer",background:"#C62828",color:"#fff",fontSize:13,fontWeight:700,fontFamily:FONT}}>
+                                📲 Solo urgentes ({critical.length})
+                              </button>
+                            )}
+                            {(critical.length>0||low.length>0) && (
+                              <button onClick={()=>sendWhatsApp("critical+low")}
+                                style={{display:"flex",alignItems:"center",gap:6,padding:"8px 14px",borderRadius:10,border:"none",cursor:"pointer",background:"#D4A000",color:"#fff",fontSize:13,fontWeight:700,fontFamily:FONT}}>
+                                📲 Urgentes + bajos ({critical.length+low.length})
+                              </button>
+                            )}
+                            <button onClick={()=>sendWhatsApp("all")}
+                              style={{display:"flex",alignItems:"center",gap:6,padding:"8px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,cursor:"pointer",background:CARD,color:DARK,fontSize:13,fontWeight:700,fontFamily:FONT}}>
+                              📲 Lista completa
+                            </button>
+                          </div>
                         </div>
                       )}
 
