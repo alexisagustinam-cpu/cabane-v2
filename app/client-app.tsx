@@ -113,6 +113,7 @@ export default function App() {
   const [newIngr, setNewIngr] = useState({name:"",unit:"unidades",stock_current:"",stock_min:""});
   const [restockId, setRestockId] = useState<string|null>(null);
   const [restockAmt, setRestockAmt] = useState("");
+  const [editIngr, setEditIngr] = useState<{id:string;name:string;unit:string;stock_min:string}|null>(null);
   const [recipeProductId, setRecipeProductId] = useState("");
   const [newRecipeLine, setNewRecipeLine] = useState({ingredient_id:"",quantity:""});
   const [notesBycat, setNotesByCat] = useState<Record<string,{id:string;note:string}[]>>({});
@@ -454,6 +455,13 @@ export default function App() {
     if (!newIngr.name||!newIngr.stock_current) return;
     await getDB().from("ingredients").insert({name:newIngr.name,unit:newIngr.unit,stock_current:parseFloat(newIngr.stock_current),stock_min:parseFloat(newIngr.stock_min)||5});
     setNewIngr({name:"",unit:"unidades",stock_current:"",stock_min:""});
+    loadInventory();
+  }
+
+  async function saveEditIngr() {
+    if (!editIngr||!editIngr.name||!editIngr.stock_min) return;
+    await getDB().from("ingredients").update({name:editIngr.name,unit:editIngr.unit,stock_min:parseFloat(editIngr.stock_min)}).eq("id",editIngr.id);
+    setEditIngr(null);
     loadInventory();
   }
 
@@ -1372,74 +1380,131 @@ export default function App() {
                   <button onClick={loadInventory} style={{...btn(CREAM2,DARK),height:38,padding:"0 14px",fontSize:13}}>↻</button>
                 </div>
 
-                {invTab==="stock" && (
-                  <div>
-                    {/* Leyenda */}
-                    <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap" as const}}>
-                      {[["#2E7D32","OK — stock suficiente"],["#D4A000","Stock bajo — reponer pronto"],["#C62828","Reponer ya — por debajo del mínimo"]].map(([c,l])=>(
-                        <div key={l} style={{display:"flex",alignItems:"center",gap:6}}>
-                          <div style={{width:12,height:12,borderRadius:"50%",background:c,flexShrink:0}}/>
-                          <span style={{fontSize:12,fontWeight:600,color:MUTED}}>{l}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Lista ingredientes */}
-                    <div style={{...card,padding:16,marginBottom:20}}>
-                      <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Ingredientes ({ingredients.length})</p>
-                      {ingredients.length===0 && <p style={{fontSize:13,color:MUTED,fontWeight:600}}>Sin ingredientes — agrega el primero abajo</p>}
-                      <div style={{display:"flex",flexDirection:"column" as const,gap:6}}>
-                        {ingredients.map(ingr=>(
-                          <div key={ingr.id} style={{marginBottom:2}}>
-                            <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:CREAM,borderRadius:restockId===ingr.id?"10px 10px 0 0":"10px"}}>
-                              <div style={{width:12,height:12,borderRadius:"50%",background:stockColor(ingr),flexShrink:0}}/>
-                              <span style={{flex:1,fontSize:14,fontWeight:700,color:DARK}}>{ingr.name}</span>
-                              <span style={{fontSize:13,fontWeight:600,color:MUTED,minWidth:90,textAlign:"right" as const}}>{ingr.stock_current} {ingr.unit}</span>
-                              <span style={{fontSize:11,fontWeight:700,color:stockColor(ingr),minWidth:80,textAlign:"right" as const}}>{stockLabel(ingr)}</span>
-                              <button onClick={()=>{setRestockId(restockId===ingr.id?null:ingr.id);setRestockAmt("");}}
-                                style={{padding:"5px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",background:restockId===ingr.id?GOLD:CREAM2,color:restockId===ingr.id?"#fff":DARK}}>
-                                {restockId===ingr.id?"Cerrar":"+ Stock"}
-                              </button>
-                              <button onClick={()=>deleteIngredient(ingr.id)}
-                                style={{padding:"5px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
-                                Eliminar
-                              </button>
-                            </div>
-                            {restockId===ingr.id && (
-                              <div style={{background:CARD,border:`1.5px solid ${BORDER}`,borderTop:"none",borderRadius:"0 0 10px 10px",padding:"10px 14px",display:"flex",gap:8,alignItems:"center"}}>
-                                <span style={{fontSize:13,fontWeight:600,color:MUTED}}>Agregar:</span>
-                                <input type="number" placeholder="Cantidad" value={restockAmt} onChange={e=>setRestockAmt(e.target.value)}
-                                  style={{flex:1,padding:"8px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
-                                <span style={{fontSize:13,fontWeight:600,color:MUTED}}>{ingr.unit}</span>
-                                <button onClick={doRestock} disabled={!restockAmt}
-                                  style={{...btn(GREEN,"#fff",!restockAmt),padding:"0 16px",height:38,fontSize:13}}>Guardar</button>
-                              </div>
-                            )}
+                {invTab==="stock" && (() => {
+                  const critical = ingredients.filter(i=>i.stock_current < i.stock_min);
+                  const low = ingredients.filter(i=>i.stock_current >= i.stock_min && i.stock_current < i.stock_min*2);
+                  const ok = ingredients.filter(i=>i.stock_current >= i.stock_min*2);
+                  const sorted = [...critical, ...low, ...ok];
+                  return (
+                    <div>
+                      {/* Tarjetas resumen */}
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:16}}>
+                        {[
+                          {label:"Reponer ya",count:critical.length,bg:"#C62828",fg:"#fff"},
+                          {label:"Stock bajo",count:low.length,bg:"#D4A000",fg:"#fff"},
+                          {label:"OK",count:ok.length,bg:"#2E7D32",fg:"#fff"},
+                        ].map(({label,count,bg,fg})=>(
+                          <div key={label} style={{background:bg,borderRadius:14,padding:"14px 16px",textAlign:"center" as const}}>
+                            <p style={{fontSize:28,fontWeight:900,color:fg,lineHeight:1}}>{count}</p>
+                            <p style={{fontSize:11,fontWeight:700,color:fg,opacity:0.8,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginTop:4}}>{label}</p>
                           </div>
                         ))}
                       </div>
-                    </div>
 
-                    {/* Agregar ingrediente */}
-                    <div style={{...card,padding:16}}>
-                      <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar ingrediente</p>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-                        <input placeholder="Nombre" value={newIngr.name} onChange={e=>setNewIngr(n=>({...n,name:e.target.value}))}
-                          style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
-                        <input placeholder="Unidad (ej: porciones, kg, litros)" value={newIngr.unit} onChange={e=>setNewIngr(n=>({...n,unit:e.target.value}))}
-                          style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
-                        <input type="number" placeholder="Stock inicial" value={newIngr.stock_current} onChange={e=>setNewIngr(n=>({...n,stock_current:e.target.value}))}
-                          style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
-                        <input type="number" placeholder="Mínimo (alerta)" value={newIngr.stock_min} onChange={e=>setNewIngr(n=>({...n,stock_min:e.target.value}))}
-                          style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                      {/* Banner alerta crítica */}
+                      {critical.length>0 && (
+                        <div style={{background:"#FFEBEE",border:"1.5px solid #C62828",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}>
+                          <span style={{fontSize:18}}>⚠️</span>
+                          <span style={{fontSize:13,fontWeight:700,color:"#C62828"}}>
+                            {critical.length} ingrediente{critical.length>1?"s":""} agotado{critical.length>1?"s":""}: {critical.map(i=>i.name).join(", ")}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Lista ingredientes */}
+                      <div style={{...card,padding:16,marginBottom:20}}>
+                        <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>
+                          Ingredientes ({ingredients.length}) — ordenados por urgencia
+                        </p>
+                        {ingredients.length===0 && <p style={{fontSize:13,color:MUTED,fontWeight:600}}>Sin ingredientes — agrega el primero abajo</p>}
+                        <div style={{display:"flex",flexDirection:"column" as const,gap:8}}>
+                          {sorted.map(ingr=>{
+                            const pct = Math.min(100, (ingr.stock_current / (ingr.stock_min*2))*100);
+                            const isRestock = restockId===ingr.id;
+                            const isEdit = editIngr?.id===ingr.id;
+                            const open = isRestock||isEdit;
+                            return (
+                              <div key={ingr.id} style={{border:`2px solid ${stockColor(ingr)}22`,borderRadius:open?"12px 12px 0 0":"12px",overflow:"hidden"}}>
+                                {/* Fila principal */}
+                                <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",background:"#fff",borderLeft:`4px solid ${stockColor(ingr)}`}}>
+                                  <div style={{flex:1,minWidth:0}}>
+                                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                                      <span style={{fontSize:14,fontWeight:800,color:DARK,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" as const}}>{ingr.name}</span>
+                                      <span style={{fontSize:11,fontWeight:700,color:stockColor(ingr),background:`${stockColor(ingr)}18`,borderRadius:20,padding:"2px 8px",whiteSpace:"nowrap" as const,flexShrink:0}}>{stockLabel(ingr)}</span>
+                                    </div>
+                                    {/* Barra de progreso */}
+                                    <div style={{height:6,background:CREAM,borderRadius:4,overflow:"hidden",marginBottom:4}}>
+                                      <div style={{height:"100%",width:`${pct}%`,background:stockColor(ingr),borderRadius:4,transition:"width 0.3s"}}/>
+                                    </div>
+                                    <span style={{fontSize:12,fontWeight:600,color:MUTED}}>{ingr.stock_current} {ingr.unit} · mín {ingr.stock_min}</span>
+                                  </div>
+                                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                                    <button onClick={()=>{setRestockId(isRestock?null:ingr.id);setRestockAmt("");setEditIngr(null);}}
+                                      style={{padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",background:isRestock?GREEN:CREAM2,color:isRestock?"#fff":DARK}}>
+                                      {isRestock?"✕":"+ Stock"}
+                                    </button>
+                                    <button onClick={()=>{setEditIngr(isEdit?null:{id:ingr.id,name:ingr.name,unit:ingr.unit,stock_min:String(ingr.stock_min)});setRestockId(null);setRestockAmt("");}}
+                                      style={{padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",background:isEdit?GOLD:CREAM2,color:isEdit?"#fff":DARK}}>
+                                      {isEdit?"✕":"Editar"}
+                                    </button>
+                                    <button onClick={()=>deleteIngredient(ingr.id)}
+                                      style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
+                                      ✕
+                                    </button>
+                                  </div>
+                                </div>
+                                {/* Panel restock */}
+                                {isRestock && (
+                                  <div style={{background:CARD,borderTop:`1.5px solid ${BORDER}`,padding:"10px 14px",display:"flex",gap:8,alignItems:"center"}}>
+                                    <span style={{fontSize:13,fontWeight:700,color:GREEN}}>+ Agregar stock:</span>
+                                    <input type="number" placeholder="Cantidad" value={restockAmt} onChange={e=>setRestockAmt(e.target.value)}
+                                      style={{flex:1,padding:"8px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                                    <span style={{fontSize:13,fontWeight:600,color:MUTED}}>{ingr.unit}</span>
+                                    <button onClick={doRestock} disabled={!restockAmt}
+                                      style={{...btn(GREEN,"#fff",!restockAmt),padding:"0 16px",height:38,fontSize:13}}>Guardar</button>
+                                  </div>
+                                )}
+                                {/* Panel editar */}
+                                {isEdit && editIngr && (
+                                  <div style={{background:CARD,borderTop:`1.5px solid ${BORDER}`,padding:"12px 14px"}}>
+                                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
+                                      <input placeholder="Nombre" value={editIngr.name} onChange={e=>setEditIngr(ei=>ei?{...ei,name:e.target.value}:ei)}
+                                        style={{padding:"8px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                                      <input placeholder="Unidad" value={editIngr.unit} onChange={e=>setEditIngr(ei=>ei?{...ei,unit:e.target.value}:ei)}
+                                        style={{padding:"8px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                                      <input type="number" placeholder="Mínimo" value={editIngr.stock_min} onChange={e=>setEditIngr(ei=>ei?{...ei,stock_min:e.target.value}:ei)}
+                                        style={{padding:"8px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                                    </div>
+                                    <button onClick={saveEditIngr} style={{...btn(GOLD,"#fff"),width:"100%",height:40,fontSize:13}}>Guardar cambios</button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                      <button onClick={addIngredient} disabled={!newIngr.name||!newIngr.stock_current}
-                        style={{...btn(RED,"#fff",!newIngr.name||!newIngr.stock_current),width:"100%",height:44,fontSize:13}}>
-                        Agregar ingrediente
-                      </button>
+
+                      {/* Agregar ingrediente */}
+                      <div style={{...card,padding:16}}>
+                        <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar ingrediente</p>
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                          <input placeholder="Nombre" value={newIngr.name} onChange={e=>setNewIngr(n=>({...n,name:e.target.value}))}
+                            style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                          <input placeholder="Unidad (porciones, litros, kg…)" value={newIngr.unit} onChange={e=>setNewIngr(n=>({...n,unit:e.target.value}))}
+                            style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                          <input type="number" placeholder="Stock inicial" value={newIngr.stock_current} onChange={e=>setNewIngr(n=>({...n,stock_current:e.target.value}))}
+                            style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                          <input type="number" placeholder="Mínimo para alertar" value={newIngr.stock_min} onChange={e=>setNewIngr(n=>({...n,stock_min:e.target.value}))}
+                            style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                        </div>
+                        <button onClick={addIngredient} disabled={!newIngr.name||!newIngr.stock_current}
+                          style={{...btn(RED,"#fff",!newIngr.name||!newIngr.stock_current),width:"100%",height:44,fontSize:13}}>
+                          Agregar ingrediente
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {invTab==="recetas" && (
                   <div>
