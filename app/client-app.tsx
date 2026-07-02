@@ -12,7 +12,7 @@ function getDB(): any {
 
 type Role = "waiter" | "kitchen" | "cashier" | "admin";
 type Status = "enviado" | "preparando" | "listo" | "pagado" | "cancelado";
-interface Profile { id: string; name: string; role: Role }
+interface Profile { id: string; name: string; role: Role; email?: string }
 interface Product { id: string; name: string; category: string; price: number; description?: string }
 interface OrderItem { id: string; product_id: string; product_name: string; quantity: number; unit_price: number; notes?: string }
 interface Ingredient { id: string; name: string; unit: string; stock_current: number; stock_min: number }
@@ -106,7 +106,7 @@ export default function App() {
   const [splitAmounts, setSplitAmounts] = useState({efectivo:"",tarjeta:"",transferencia:""});
   const [adminStats, setAdminStats] = useState<AdminStats|null>(null);
   const [adminProducts, setAdminProducts] = useState<Product[]>([]);
-  const [adminSection, setAdminSection] = useState<"stats"|"products"|"notes"|"inventory">("stats");
+  const [adminSection, setAdminSection] = useState<"stats"|"products"|"notes"|"inventory"|"users">("stats");
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [invTab, setInvTab] = useState<"stock"|"recetas">("stock");
@@ -128,6 +128,11 @@ export default function App() {
   const [expandedDesc, setExpandedDesc] = useState<string|null>(null);
   const [tick, setTick] = useState(0);
   const [kSummary, setKSummary] = useState<{name:string;qty:number}[]>([]);
+  const [adminUsers, setAdminUsers] = useState<Profile[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [newUser, setNewUser] = useState({name:"",email:"",password:"",role:"waiter" as Role});
+  const [userMsg, setUserMsg] = useState("");
+  const [editRole, setEditRole] = useState<{id:string;role:Role}|null>(null);
   const styleRef = useRef(false);
 
   useEffect(() => {
@@ -195,6 +200,41 @@ export default function App() {
   async function deleteNote(id:string) {
     await getDB().from("category_notes").delete().eq("id",id);
     loadNotes();
+  }
+
+  async function loadUsers() {
+    setUsersLoading(true);
+    const { data } = await getDB().from("profiles").select("*").order("name");
+    setAdminUsers(data||[]);
+    setUsersLoading(false);
+  }
+
+  async function createUser() {
+    if (!newUser.name||!newUser.email||!newUser.password) return;
+    setUserMsg("Creando usuario…");
+    const { data, error } = await getDB().auth.signUp({
+      email: newUser.email,
+      password: newUser.password,
+      options: { data: { name: newUser.name } },
+    });
+    if (error) { setUserMsg(`Error: ${error.message}`); return; }
+    if (data.user) {
+      await getDB().from("profiles").upsert({ id: data.user.id, name: newUser.name, role: newUser.role, email: newUser.email });
+      setNewUser({name:"",email:"",password:"",role:"waiter"});
+      setUserMsg("Usuario creado. Ya puede ingresar con esas credenciales.");
+      loadUsers();
+    }
+  }
+
+  async function updateUserRole(id: string, role: Role) {
+    await getDB().from("profiles").update({ role }).eq("id", id);
+    setAdminUsers(prev=>prev.map(u=>u.id===id?{...u,role}:u));
+    setEditRole(null);
+  }
+
+  async function removeUserProfile(id: string) {
+    await getDB().from("profiles").delete().eq("id", id);
+    setAdminUsers(prev=>prev.filter(u=>u.id!==id));
   }
 
   useEffect(() => {
@@ -1198,6 +1238,7 @@ export default function App() {
               <button onClick={()=>{setAdminSection("products");loadAdminProducts();}} style={{...btn(adminSection==="products"?RED:CREAM2, adminSection==="products"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Productos</button>
               <button onClick={()=>{setAdminSection("notes");loadNotes();}} style={{...btn(adminSection==="notes"?RED:CREAM2, adminSection==="notes"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Notas</button>
               <button onClick={()=>{setAdminSection("inventory");loadInventory();}} style={{...btn(adminSection==="inventory"?RED:CREAM2, adminSection==="inventory"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Inventario</button>
+              <button onClick={()=>{setAdminSection("users");loadUsers();}} style={{...btn(adminSection==="users"?RED:CREAM2, adminSection==="users"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Usuarios</button>
             </div>
           </div>
 
@@ -1611,6 +1652,89 @@ export default function App() {
                     )}
                   </div>
                 )}
+              </div>
+            );
+          })()}
+
+          {adminSection==="users" && (() => {
+            const roleLabels: Record<Role,string> = { waiter:"Mesero", kitchen:"Cocina", cashier:"Caja", admin:"Admin" };
+            const roleBg: Record<Role,string> = { waiter:DARK, kitchen:GOLD, cashier:GREEN, admin:RED };
+            const roleFg: Record<Role,string> = { waiter:"#fff", kitchen:DARK, cashier:"#fff", admin:"#fff" };
+            return (
+              <div>
+                {/* Crear usuario */}
+                <div style={{...card,padding:20,marginBottom:20}}>
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar nuevo usuario</p>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                    <input placeholder="Nombre completo" value={newUser.name} onChange={e=>setNewUser(u=>({...u,name:e.target.value}))}
+                      style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                    <input placeholder="Email" type="email" value={newUser.email} onChange={e=>setNewUser(u=>({...u,email:e.target.value}))}
+                      style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                    <input placeholder="Contraseña inicial" type="password" value={newUser.password} onChange={e=>setNewUser(u=>({...u,password:e.target.value}))}
+                      style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                    <select value={newUser.role} onChange={e=>setNewUser(u=>({...u,role:e.target.value as Role}))}
+                      style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}>
+                      {(["waiter","kitchen","cashier","admin"] as Role[]).map(r=><option key={r} value={r}>{roleLabels[r]}</option>)}
+                    </select>
+                  </div>
+                  <button onClick={createUser} disabled={!newUser.name||!newUser.email||!newUser.password}
+                    style={{...btn(RED,"#fff",!newUser.name||!newUser.email||!newUser.password),width:"100%",height:48}}>
+                    Crear usuario
+                  </button>
+                  {userMsg && (
+                    <div style={{marginTop:10,padding:"10px 14px",borderRadius:10,background:userMsg.startsWith("Error")?`rgba(122,30,58,0.12)`:`rgba(46,125,50,0.12)`,
+                      border:`1px solid ${userMsg.startsWith("Error")?"rgba(122,30,58,0.3)":"rgba(46,125,50,0.3)"}`,
+                      fontSize:13,fontWeight:600,color:userMsg.startsWith("Error")?RED:GREEN}}>
+                      {userMsg}
+                    </div>
+                  )}
+                </div>
+
+                {/* Lista de usuarios */}
+                <div style={{...card,padding:20}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                    <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em"}}>Equipo activo ({adminUsers.length})</p>
+                    <button onClick={loadUsers} style={{...btn(CREAM2,DARK),height:34,padding:"0 14px",fontSize:12}}>{usersLoading?"…":"↻"}</button>
+                  </div>
+                  {adminUsers.length===0 && !usersLoading && (
+                    <p style={{fontSize:13,color:MUTED,fontWeight:600,padding:"8px 0"}}>No hay usuarios aún</p>
+                  )}
+                  {adminUsers.map(u=>(
+                    <div key={u.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 0",borderBottom:`1px solid ${BORDER}`}}>
+                      <div style={{width:40,height:40,borderRadius:"50%",background:roleBg[u.role],display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                        <span style={{fontSize:15,fontWeight:900,color:roleFg[u.role]}}>{u.name.charAt(0).toUpperCase()}</span>
+                      </div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <p style={{fontSize:14,fontWeight:700,color:DARK,marginBottom:2}}>{u.name}</p>
+                        <p style={{fontSize:12,color:MUTED,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" as const}}>{u.email||"—"}</p>
+                      </div>
+                      {editRole?.id===u.id ? (
+                        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                          <select value={editRole.role} onChange={e=>setEditRole({id:u.id,role:e.target.value as Role})}
+                            style={{padding:"6px 10px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}>
+                            {(["waiter","kitchen","cashier","admin"] as Role[]).map(r=><option key={r} value={r}>{roleLabels[r]}</option>)}
+                          </select>
+                          <button onClick={()=>updateUserRole(u.id,editRole.role)}
+                            style={{...btn(GREEN,"#fff"),height:34,padding:"0 12px",fontSize:13,minHeight:34}}>OK</button>
+                          <button onClick={()=>setEditRole(null)}
+                            style={{...btn(CREAM2,DARK),height:34,padding:"0 12px",fontSize:13,minHeight:34}}>×</button>
+                        </div>
+                      ) : (
+                        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                          <span style={{background:roleBg[u.role],color:roleFg[u.role],padding:"4px 10px",borderRadius:999,fontSize:11,fontWeight:700,letterSpacing:"0.05em"}}>{roleLabels[u.role]}</span>
+                          {u.id!==profile?.id && (
+                            <>
+                              <button onClick={()=>setEditRole({id:u.id,role:u.role})}
+                                style={{...btn(CREAM2,DARK),height:32,padding:"0 10px",fontSize:12,minHeight:32}}>Rol</button>
+                              <button onClick={()=>removeUserProfile(u.id)}
+                                style={{...btn("rgba(122,30,58,0.1)",RED),height:32,padding:"0 10px",fontSize:12,minHeight:32}}>Quitar</button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             );
           })()}
