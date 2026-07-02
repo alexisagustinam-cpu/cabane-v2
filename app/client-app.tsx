@@ -14,7 +14,9 @@ type Role = "waiter" | "kitchen" | "cashier" | "admin";
 type Status = "enviado" | "preparando" | "listo" | "pagado" | "cancelado";
 interface Profile { id: string; name: string; role: Role }
 interface Product { id: string; name: string; category: string; price: number; description?: string }
-interface OrderItem { id: string; product_name: string; quantity: number; unit_price: number; notes?: string }
+interface OrderItem { id: string; product_id: string; product_name: string; quantity: number; unit_price: number; notes?: string }
+interface Ingredient { id: string; name: string; unit: string; stock_current: number; stock_min: number }
+interface Recipe { id: string; product_id: string; ingredient_id: string; quantity: number }
 interface Order { id: string; order_number: number; table_label: string; status: Status; total: number; created_at: string; table_note?: string; order_items?: OrderItem[] }
 interface CartItem extends Product { qty: number; notes: string[]; customNote: string }
 interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[] }
@@ -104,7 +106,15 @@ export default function App() {
   const [splitAmounts, setSplitAmounts] = useState({efectivo:"",tarjeta:"",transferencia:""});
   const [adminStats, setAdminStats] = useState<AdminStats|null>(null);
   const [adminProducts, setAdminProducts] = useState<Product[]>([]);
-  const [adminSection, setAdminSection] = useState<"stats"|"products"|"notes">("stats");
+  const [adminSection, setAdminSection] = useState<"stats"|"products"|"notes"|"inventory">("stats");
+  const [ingredients, setIngredients] = useState<Ingredient[]>([]);
+  const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [invTab, setInvTab] = useState<"stock"|"recetas">("stock");
+  const [newIngr, setNewIngr] = useState({name:"",unit:"unidades",stock_current:"",stock_min:""});
+  const [restockId, setRestockId] = useState<string|null>(null);
+  const [restockAmt, setRestockAmt] = useState("");
+  const [recipeProductId, setRecipeProductId] = useState("");
+  const [newRecipeLine, setNewRecipeLine] = useState({ingredient_id:"",quantity:""});
   const [notesBycat, setNotesByCat] = useState<Record<string,{id:string;note:string}[]>>({});
   const [newNote, setNewNote] = useState({category:CAT_ORDER[0],note:""});
   const [adminMode, setAdminMode] = useState<"day"|"month">("day");
@@ -243,7 +253,7 @@ export default function App() {
   useEffect(() => {
     if (screen==="kitchen") loadKitchen();
     if (screen==="cashier") loadCashier();
-    if (screen==="admin") { loadAdminStats(); loadAdminProducts(); loadNotes(); }
+    if (screen==="admin") { loadAdminStats(); loadAdminProducts(); loadNotes(); loadInventory(); }
   }, [screen, loadKitchen, loadCashier]);
 
   // Realtime caja
@@ -431,12 +441,77 @@ export default function App() {
     setUpdating(null);
   }
 
+  async function loadInventory() {
+    const [{ data: ingr }, { data: rec }] = await Promise.all([
+      getDB().from("ingredients").select("*").order("name"),
+      getDB().from("recipes").select("*"),
+    ]);
+    setIngredients(ingr||[]);
+    setRecipes(rec||[]);
+  }
+
+  async function addIngredient() {
+    if (!newIngr.name||!newIngr.stock_current) return;
+    await getDB().from("ingredients").insert({name:newIngr.name,unit:newIngr.unit,stock_current:parseFloat(newIngr.stock_current),stock_min:parseFloat(newIngr.stock_min)||5});
+    setNewIngr({name:"",unit:"unidades",stock_current:"",stock_min:""});
+    loadInventory();
+  }
+
+  async function doRestock() {
+    if (!restockId||!restockAmt) return;
+    const ingr = ingredients.find(i=>i.id===restockId);
+    if (!ingr) return;
+    await getDB().from("ingredients").update({stock_current:ingr.stock_current+parseFloat(restockAmt)}).eq("id",restockId);
+    setRestockId(null); setRestockAmt("");
+    loadInventory();
+  }
+
+  async function deleteIngredient(id: string) {
+    if (!confirm("¿Eliminar ingrediente?")) return;
+    await getDB().from("ingredients").delete().eq("id",id);
+    loadInventory();
+  }
+
+  async function addRecipeLine() {
+    if (!recipeProductId||!newRecipeLine.ingredient_id||!newRecipeLine.quantity) return;
+    await getDB().from("recipes").upsert({product_id:recipeProductId,ingredient_id:newRecipeLine.ingredient_id,quantity:parseFloat(newRecipeLine.quantity)},{onConflict:"product_id,ingredient_id"});
+    setNewRecipeLine({ingredient_id:"",quantity:""});
+    loadInventory();
+  }
+
+  async function deleteRecipeLine(id: string) {
+    await getDB().from("recipes").delete().eq("id",id);
+    loadInventory();
+  }
+
+  async function deductInventory(order: Order) {
+    const items = order.order_items||[];
+    if (!items.length) return;
+    const productIds = [...new Set(items.map(i=>i.product_id).filter(Boolean))];
+    if (!productIds.length) return;
+    const { data: recipeLines } = await getDB().from("recipes").select("*").in("product_id",productIds);
+    if (!recipeLines?.length) return;
+    const usage: Record<string,number> = {};
+    for (const item of items) {
+      const lines = (recipeLines as Recipe[]).filter(r=>r.product_id===item.product_id);
+      for (const line of lines) {
+        usage[line.ingredient_id] = (usage[line.ingredient_id]||0) + line.quantity * item.quantity;
+      }
+    }
+    const { data: currentIngr } = await getDB().from("ingredients").select("id,stock_current").in("id",Object.keys(usage));
+    for (const ingr of (currentIngr||[])) {
+      const newStock = Math.max(0, ingr.stock_current - (usage[ingr.id]||0));
+      await getDB().from("ingredients").update({stock_current:newStock}).eq("id",ingr.id);
+    }
+  }
+
   async function cobrar(id: string, method: string, amount: number) {
     setPaying(id);
     setCOrders((prev:Order[])=>prev.map(o=>o.id===id?{...o,status:"pagado"}:o));
     setCPayBreakdown((prev:{efectivo:number;tarjeta:number;transferencia:number})=>({...prev,[method]:(prev[method as keyof typeof prev]||0)+amount}));
     await getDB().from("payments").insert({order_id:id,method,amount});
     await getDB().from("orders").update({status:"pagado"}).eq("id",id);
+    const order = cOrders.find(o=>o.id===id); if (order) deductInventory(order);
     setPaying(null);
   }
 
@@ -451,6 +526,7 @@ export default function App() {
     });
     await Promise.all(parts.map(p=>getDB().from("payments").insert({order_id:order.id,method:p.method,amount:p.amount})));
     await getDB().from("orders").update({status:"pagado"}).eq("id",order.id);
+    deductInventory(order);
     setPaying(null);
   }
 
@@ -1113,6 +1189,7 @@ export default function App() {
               <button onClick={()=>{setAdminSection("stats");loadAdminStats();}} style={{...btn(adminSection==="stats"?RED:CREAM2, adminSection==="stats"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Reportes</button>
               <button onClick={()=>{setAdminSection("products");loadAdminProducts();}} style={{...btn(adminSection==="products"?RED:CREAM2, adminSection==="products"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Productos</button>
               <button onClick={()=>{setAdminSection("notes");loadNotes();}} style={{...btn(adminSection==="notes"?RED:CREAM2, adminSection==="notes"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Notas</button>
+              <button onClick={()=>{setAdminSection("inventory");loadInventory();}} style={{...btn(adminSection==="inventory"?RED:CREAM2, adminSection==="inventory"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Inventario</button>
             </div>
           </div>
 
@@ -1281,6 +1358,154 @@ export default function App() {
               </div>
             </div>
           )}
+
+          {adminSection==="inventory" && (() => {
+            const stockColor = (i:Ingredient) => i.stock_current < i.stock_min ? "#C62828" : i.stock_current < i.stock_min*2 ? "#E65100" : "#2E7D32";
+            const stockLabel = (i:Ingredient) => i.stock_current < i.stock_min ? "Reponer ya" : i.stock_current < i.stock_min*2 ? "Stock bajo" : "OK";
+            const prodRecipes = recipes.filter(r=>r.product_id===recipeProductId);
+            return (
+              <div>
+                {/* Tabs */}
+                <div style={{display:"flex",gap:8,marginBottom:16}}>
+                  <button onClick={()=>setInvTab("stock")} style={{...btn(invTab==="stock"?RED:CREAM2,invTab==="stock"?"#fff":DARK),height:38,padding:"0 20px",fontSize:13}}>Stock</button>
+                  <button onClick={()=>setInvTab("recetas")} style={{...btn(invTab==="recetas"?RED:CREAM2,invTab==="recetas"?"#fff":DARK),height:38,padding:"0 20px",fontSize:13}}>Recetas</button>
+                  <button onClick={loadInventory} style={{...btn(CREAM2,DARK),height:38,padding:"0 14px",fontSize:13}}>↻</button>
+                </div>
+
+                {invTab==="stock" && (
+                  <div>
+                    {/* Leyenda */}
+                    <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap" as const}}>
+                      {[["#2E7D32","OK — stock suficiente"],["#E65100","Stock bajo — reponer pronto"],["#C62828","Reponer ya — por debajo del mínimo"]].map(([c,l])=>(
+                        <div key={l} style={{display:"flex",alignItems:"center",gap:6}}>
+                          <div style={{width:12,height:12,borderRadius:"50%",background:c,flexShrink:0}}/>
+                          <span style={{fontSize:12,fontWeight:600,color:MUTED}}>{l}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Lista ingredientes */}
+                    <div style={{...card,padding:16,marginBottom:20}}>
+                      <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Ingredientes ({ingredients.length})</p>
+                      {ingredients.length===0 && <p style={{fontSize:13,color:MUTED,fontWeight:600}}>Sin ingredientes — agrega el primero abajo</p>}
+                      <div style={{display:"flex",flexDirection:"column" as const,gap:6}}>
+                        {ingredients.map(ingr=>(
+                          <div key={ingr.id} style={{marginBottom:2}}>
+                            <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:CREAM,borderRadius:restockId===ingr.id?"10px 10px 0 0":"10px"}}>
+                              <div style={{width:12,height:12,borderRadius:"50%",background:stockColor(ingr),flexShrink:0}}/>
+                              <span style={{flex:1,fontSize:14,fontWeight:700,color:DARK}}>{ingr.name}</span>
+                              <span style={{fontSize:13,fontWeight:600,color:MUTED,minWidth:90,textAlign:"right" as const}}>{ingr.stock_current} {ingr.unit}</span>
+                              <span style={{fontSize:11,fontWeight:700,color:stockColor(ingr),minWidth:80,textAlign:"right" as const}}>{stockLabel(ingr)}</span>
+                              <button onClick={()=>{setRestockId(restockId===ingr.id?null:ingr.id);setRestockAmt("");}}
+                                style={{padding:"5px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",background:restockId===ingr.id?GOLD:CREAM2,color:restockId===ingr.id?"#fff":DARK}}>
+                                {restockId===ingr.id?"Cerrar":"+ Stock"}
+                              </button>
+                              <button onClick={()=>deleteIngredient(ingr.id)}
+                                style={{padding:"5px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
+                                Eliminar
+                              </button>
+                            </div>
+                            {restockId===ingr.id && (
+                              <div style={{background:CARD,border:`1.5px solid ${BORDER}`,borderTop:"none",borderRadius:"0 0 10px 10px",padding:"10px 14px",display:"flex",gap:8,alignItems:"center"}}>
+                                <span style={{fontSize:13,fontWeight:600,color:MUTED}}>Agregar:</span>
+                                <input type="number" placeholder="Cantidad" value={restockAmt} onChange={e=>setRestockAmt(e.target.value)}
+                                  style={{flex:1,padding:"8px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                                <span style={{fontSize:13,fontWeight:600,color:MUTED}}>{ingr.unit}</span>
+                                <button onClick={doRestock} disabled={!restockAmt}
+                                  style={{...btn(GREEN,"#fff",!restockAmt),padding:"0 16px",height:38,fontSize:13}}>Guardar</button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Agregar ingrediente */}
+                    <div style={{...card,padding:16}}>
+                      <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar ingrediente</p>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                        <input placeholder="Nombre" value={newIngr.name} onChange={e=>setNewIngr(n=>({...n,name:e.target.value}))}
+                          style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                        <input placeholder="Unidad (ej: porciones, kg, litros)" value={newIngr.unit} onChange={e=>setNewIngr(n=>({...n,unit:e.target.value}))}
+                          style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                        <input type="number" placeholder="Stock inicial" value={newIngr.stock_current} onChange={e=>setNewIngr(n=>({...n,stock_current:e.target.value}))}
+                          style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                        <input type="number" placeholder="Mínimo (alerta)" value={newIngr.stock_min} onChange={e=>setNewIngr(n=>({...n,stock_min:e.target.value}))}
+                          style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                      </div>
+                      <button onClick={addIngredient} disabled={!newIngr.name||!newIngr.stock_current}
+                        style={{...btn(RED,"#fff",!newIngr.name||!newIngr.stock_current),width:"100%",height:44,fontSize:13}}>
+                        Agregar ingrediente
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {invTab==="recetas" && (
+                  <div>
+                    {/* Selector de producto */}
+                    <div style={{...card,padding:16,marginBottom:16}}>
+                      <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:10}}>Seleccionar producto</p>
+                      <select value={recipeProductId} onChange={e=>setRecipeProductId(e.target.value)}
+                        style={{width:"100%",padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}>
+                        <option value="">— Elegir producto —</option>
+                        {CAT_ORDER.map(cat=>{
+                          const prods = adminProducts.filter(p=>p.category===cat);
+                          if (!prods.length) return null;
+                          return <optgroup key={cat} label={cat}>{prods.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>;
+                        })}
+                      </select>
+                    </div>
+
+                    {recipeProductId && (
+                      <div>
+                        {/* Receta actual */}
+                        <div style={{...card,padding:16,marginBottom:16}}>
+                          <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>
+                            Ingredientes de: <span style={{color:RED}}>{adminProducts.find(p=>p.id===recipeProductId)?.name}</span>
+                          </p>
+                          {prodRecipes.length===0 && <p style={{fontSize:13,color:MUTED,fontWeight:600}}>Sin ingredientes definidos — agrega abajo</p>}
+                          <div style={{display:"flex",flexDirection:"column" as const,gap:6}}>
+                            {prodRecipes.map(r=>{
+                              const ingr = ingredients.find(i=>i.id===r.ingredient_id);
+                              return (
+                                <div key={r.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:CREAM,borderRadius:10}}>
+                                  <span style={{flex:1,fontSize:14,fontWeight:700,color:DARK}}>{ingr?.name||"?"}</span>
+                                  <span style={{fontSize:14,fontWeight:900,color:RED}}>{r.quantity} {ingr?.unit}</span>
+                                  <button onClick={()=>deleteRecipeLine(r.id)}
+                                    style={{padding:"5px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
+                                    Quitar
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Agregar línea de receta */}
+                        <div style={{...card,padding:16}}>
+                          <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:10}}>Agregar ingrediente a la receta</p>
+                          <div style={{display:"flex",gap:8,marginBottom:10}}>
+                            <select value={newRecipeLine.ingredient_id} onChange={e=>setNewRecipeLine(r=>({...r,ingredient_id:e.target.value}))}
+                              style={{flex:2,padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}>
+                              <option value="">— Ingrediente —</option>
+                              {ingredients.map(i=><option key={i.id} value={i.id}>{i.name} ({i.unit})</option>)}
+                            </select>
+                            <input type="number" placeholder="Cantidad" value={newRecipeLine.quantity} onChange={e=>setNewRecipeLine(r=>({...r,quantity:e.target.value}))}
+                              style={{flex:1,padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                          </div>
+                          <button onClick={addRecipeLine} disabled={!newRecipeLine.ingredient_id||!newRecipeLine.quantity}
+                            style={{...btn(RED,"#fff",!newRecipeLine.ingredient_id||!newRecipeLine.quantity),width:"100%",height:44,fontSize:13}}>
+                            Agregar a la receta
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {adminSection==="notes" && (
             <div>
