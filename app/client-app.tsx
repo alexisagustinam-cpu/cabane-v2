@@ -1360,7 +1360,7 @@ export default function App() {
           )}
 
           {adminSection==="inventory" && (() => {
-            const stockColor = (i:Ingredient) => i.stock_current < i.stock_min ? "#C62828" : i.stock_current < i.stock_min*2 ? "#E65100" : "#2E7D32";
+            const stockColor = (i:Ingredient) => i.stock_current < i.stock_min ? "#C62828" : i.stock_current < i.stock_min*2 ? "#D4A000" : "#2E7D32";
             const stockLabel = (i:Ingredient) => i.stock_current < i.stock_min ? "Reponer ya" : i.stock_current < i.stock_min*2 ? "Stock bajo" : "OK";
             const prodRecipes = recipes.filter(r=>r.product_id===recipeProductId);
             return (
@@ -1376,7 +1376,7 @@ export default function App() {
                   <div>
                     {/* Leyenda */}
                     <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap" as const}}>
-                      {[["#2E7D32","OK — stock suficiente"],["#E65100","Stock bajo — reponer pronto"],["#C62828","Reponer ya — por debajo del mínimo"]].map(([c,l])=>(
+                      {[["#2E7D32","OK — stock suficiente"],["#D4A000","Stock bajo — reponer pronto"],["#C62828","Reponer ya — por debajo del mínimo"]].map(([c,l])=>(
                         <div key={l} style={{display:"flex",alignItems:"center",gap:6}}>
                           <div style={{width:12,height:12,borderRadius:"50%",background:c,flexShrink:0}}/>
                           <span style={{fontSize:12,fontWeight:600,color:MUTED}}>{l}</span>
