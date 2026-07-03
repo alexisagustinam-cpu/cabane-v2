@@ -133,6 +133,8 @@ export default function App() {
   const [newUser, setNewUser] = useState({name:"",email:"",password:"",role:"waiter" as Role});
   const [userMsg, setUserMsg] = useState("");
   const [editRole, setEditRole] = useState<{id:string;role:Role}|null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{msg:string;onOk:()=>void}|null>(null);
+  const askConfirm = (msg:string, onOk:()=>void) => setConfirmDialog({msg,onOk});
   const styleRef = useRef(false);
 
   useEffect(() => {
@@ -232,9 +234,11 @@ export default function App() {
     setEditRole(null);
   }
 
-  async function removeUserProfile(id: string) {
-    await getDB().from("profiles").delete().eq("id", id);
-    setAdminUsers(prev=>prev.filter(u=>u.id!==id));
+  function removeUserProfile(id: string) {
+    askConfirm("¿Quitar acceso a este usuario?", async () => {
+      await getDB().from("profiles").delete().eq("id", id);
+      setAdminUsers(prev=>prev.filter(u=>u.id!==id));
+    });
   }
 
   useEffect(() => {
@@ -278,11 +282,8 @@ export default function App() {
     const pb = {efectivo:0,tarjeta:0,transferencia:0};
     if (paidIds.length) {
       const { data: payments } = await getDB().from("payments").select("order_id,method,amount").in("order_id",paidIds);
-      // Deduplicar: un pago por pedido (evita duplicados de pruebas anteriores)
-      const seen = new Set<string>();
+      // Sumar todos los rows — los pagos divididos generan múltiples rows por pedido
       (payments||[]).forEach((p:{order_id:string;method:string;amount:number}) => {
-        if (seen.has(p.order_id)) return;
-        seen.add(p.order_id);
         if (p.method in pb) pb[p.method as keyof typeof pb] += p.amount;
       });
     }
@@ -418,10 +419,11 @@ export default function App() {
     await getDB().from("products").update({is_active:!is_active}).eq("id",id);
   }
 
-  async function deleteProduct(id: string) {
-    if (!confirm("¿Eliminar producto?")) return;
-    setAdminProducts((prev:Product[])=>prev.filter((p:Product)=>p.id!==id));
-    await getDB().from("products").delete().eq("id",id);
+  function deleteProduct(id: string) {
+    askConfirm("¿Eliminar este producto?", async () => {
+      setAdminProducts((prev:Product[])=>prev.filter((p:Product)=>p.id!==id));
+      await getDB().from("products").delete().eq("id",id);
+    });
   }
 
   function changeQty(id: string, delta: number) {
@@ -469,10 +471,11 @@ export default function App() {
     setSending(false);
   }
 
-  async function cancelOrder(id: string) {
-    if (!confirm("¿Cancelar este pedido?")) return;
-    setKOrders((prev:Order[])=>prev.filter((o:Order)=>o.id!==id));
-    await getDB().from("orders").update({status:"cancelado"}).eq("id",id);
+  function cancelOrder(id: string) {
+    askConfirm("¿Cancelar este pedido?", async () => {
+      setKOrders((prev:Order[])=>prev.filter((o:Order)=>o.id!==id));
+      await getDB().from("orders").update({status:"cancelado"}).eq("id",id);
+    });
   }
 
   async function kitchenUpdate(id: string, status: Status) {
@@ -514,10 +517,11 @@ export default function App() {
     loadInventory();
   }
 
-  async function deleteIngredient(id: string) {
-    if (!confirm("¿Eliminar ingrediente?")) return;
-    await getDB().from("ingredients").delete().eq("id",id);
-    loadInventory();
+  function deleteIngredient(id: string) {
+    askConfirm("¿Eliminar este ingrediente?", async () => {
+      await getDB().from("ingredients").delete().eq("id",id);
+      loadInventory();
+    });
   }
 
   async function addRecipeLine() {
@@ -557,9 +561,11 @@ export default function App() {
     setPaying(id);
     setCOrders((prev:Order[])=>prev.map(o=>o.id===id?{...o,status:"pagado"}:o));
     setCPayBreakdown((prev:{efectivo:number;tarjeta:number;transferencia:number})=>({...prev,[method]:(prev[method as keyof typeof prev]||0)+amount}));
+    // Fetch fresh order with items — Realtime orders arrive with order_items:[] empty
+    const { data: freshOrder } = await getDB().from("orders").select("*, order_items(*)").eq("id",id).single();
     await getDB().from("payments").insert({order_id:id,method,amount});
     await getDB().from("orders").update({status:"pagado"}).eq("id",id);
-    const order = cOrders.find(o=>o.id===id); if (order) deductInventory(order);
+    if (freshOrder) deductInventory(freshOrder);
     setPaying(null);
   }
 
@@ -572,9 +578,11 @@ export default function App() {
       parts.forEach(p=>{ next[p.method as keyof typeof next] = (next[p.method as keyof typeof next]||0) + p.amount; });
       return next;
     });
+    // Fetch fresh order with items before deducting stock
+    const { data: freshOrder } = await getDB().from("orders").select("*, order_items(*)").eq("id",order.id).single();
     await Promise.all(parts.map(p=>getDB().from("payments").insert({order_id:order.id,method:p.method,amount:p.amount})));
     await getDB().from("orders").update({status:"pagado"}).eq("id",order.id);
-    deductInventory(order);
+    if (freshOrder) deductInventory(freshOrder);
     setPaying(null);
   }
 
@@ -1795,7 +1803,23 @@ export default function App() {
         </div>
       )}
 
-      {/* ── MODAL CONFIRMAR ────────────────────────────────────── */}
+      {/* ── MODAL CONFIRMACIÓN ─────────────────────────────────── */}
+      {confirmDialog && (
+        <div onClick={e=>{if(e.target===e.currentTarget)setConfirmDialog(null)}}
+          style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.72)",backdropFilter:"blur(6px)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{...card,padding:24,width:"100%",maxWidth:320,animation:"fadeUp .2s ease both"}}>
+            <p style={{fontSize:15,fontWeight:700,color:DARK,marginBottom:20,lineHeight:1.4}}>{confirmDialog.msg}</p>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>setConfirmDialog(null)}
+                style={{...btn(CREAM2,DARK),flex:1,height:44,fontSize:14,minHeight:44}}>Cancelar</button>
+              <button onClick={()=>{const fn=confirmDialog.onOk;setConfirmDialog(null);fn();}}
+                style={{...btn(RED,"#fff"),flex:1,height:44,fontSize:14,minHeight:44}}>Confirmar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL PAGO DIVIDIDO ─────────────────────────────────── */}
       {splitModal && (
         <div onClick={e=>{if(e.target===e.currentTarget)setSplitModal(null)}}
           style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
