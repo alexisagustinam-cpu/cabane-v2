@@ -83,6 +83,7 @@ html,body{height:100%;font-family:'Nunito',sans-serif;background:${CREAM}}
 button{cursor:pointer;border:none;font-family:'Nunito',sans-serif;transition:transform .1s,box-shadow .1s}
 button:not(:disabled):active{transform:scale(.97)}
 input{font-family:'Nunito',sans-serif}
+input,select,textarea{min-width:0;max-width:100%;box-sizing:border-box}
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-thumb{background:${BORDER};border-radius:99px}
 @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
@@ -2094,11 +2095,14 @@ export default function App() {
                       <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",padding:"8px 0 4px"}}>{cat}</p>
                       {adminProducts.filter(p=>p.category===cat).map(p=>(
                         <div key={p.id} style={{marginBottom:6}}>
-                          <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:CREAM,
+                          <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:CREAM,flexWrap:"wrap" as const,
                             borderRadius:editProd?.id===p.id?"10px 10px 0 0":"10px",
                             opacity:(p as Product & {is_active?:boolean}).is_active===false?0.5:1}}>
-                            <span style={{flex:1,fontSize:14,fontWeight:700,color:DARK}}>{p.name}</span>
-                            <span style={{fontSize:14,fontWeight:900,color:RED,minWidth:50,textAlign:"right" as const}}>{$(p.price)}</span>
+                            <div style={{display:"flex",alignItems:"center",gap:8,flex:"1 1 170px",minWidth:0}}>
+                              <span style={{flex:1,fontSize:14,fontWeight:700,color:DARK,lineHeight:1.3}}>{p.name}</span>
+                              <span style={{fontSize:14,fontWeight:900,color:RED,textAlign:"right" as const,flexShrink:0}}>{$(p.price)}</span>
+                            </div>
+                            <div style={{display:"flex",gap:6,marginLeft:"auto"}}>
                             <button onClick={()=>setEditProd(editProd?.id===p.id?null:{id:p.id,name:p.name,category:p.category,price:String(p.price),description:p.description||""})}
                               style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
                                 background:editProd?.id===p.id?GOLD:CREAM2,color:editProd?.id===p.id?"#fff":DARK}}>
@@ -2113,6 +2117,7 @@ export default function App() {
                               style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
                               Eliminar
                             </button>
+                            </div>
                           </div>
                           {editProd?.id===p.id && (
                             <div style={{background:CARD,border:`1.5px solid ${BORDER}`,borderTop:"none",borderRadius:"0 0 10px 10px",padding:"12px 12px 14px"}}>
@@ -2246,9 +2251,9 @@ export default function App() {
                               <div key={ingr.id} style={{border:`2px solid ${stockColor(ingr)}22`,borderRadius:open?"12px 12px 0 0":"12px",overflow:"hidden"}}>
                                 {/* Fila principal */}
                                 <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",background:"#fff",borderLeft:`4px solid ${stockColor(ingr)}`,flexWrap:"wrap" as const}}>
-                                  <div style={{flex:1,minWidth:0}}>
-                                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-                                      <span style={{fontSize:14,fontWeight:800,color:DARK,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" as const}}>{ingr.name}</span>
+                                  <div style={{flex:"1 1 200px",minWidth:0}}>
+                                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap" as const}}>
+                                      <span style={{fontSize:14,fontWeight:800,color:DARK,lineHeight:1.3}}>{ingr.name}</span>
                                       <span style={{fontSize:11,fontWeight:700,color:stockColor(ingr),background:`${stockColor(ingr)}18`,borderRadius:20,padding:"2px 8px",whiteSpace:"nowrap" as const,flexShrink:0}}>{stockLabel(ingr)}</span>
                                     </div>
                                     {/* Barra de progreso */}
@@ -2257,7 +2262,7 @@ export default function App() {
                                     </div>
                                     <span style={{fontSize:12,fontWeight:600,color:MUTED}}>{ingr.stock_current} {ingr.unit} · mín {ingr.stock_min}</span>
                                   </div>
-                                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                                  <div style={{display:"flex",gap:6,flexShrink:0,marginLeft:"auto"}}>
                                     <button onClick={()=>{setRestockId(isRestock?null:ingr.id);setRestockAmt("");setEditIngr(null);}}
                                       style={{padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",background:isRestock?GREEN:CREAM2,color:isRestock?"#fff":DARK}}>
                                       {isRestock?"✕":"+ Stock"}
@@ -2286,7 +2291,7 @@ export default function App() {
                                 {/* Panel editar */}
                                 {isEdit && editIngr && (
                                   <div style={{background:CARD,borderTop:`1.5px solid ${BORDER}`,padding:"12px 14px"}}>
-                                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
+                                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:10}}>
                                       <input placeholder="Nombre" value={editIngr.name} onChange={e=>setEditIngr(ei=>ei?{...ei,name:e.target.value}:ei)}
                                         style={{padding:"8px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
                                       <input placeholder="Unidad" value={editIngr.unit} onChange={e=>setEditIngr(ei=>ei?{...ei,unit:e.target.value}:ei)}
@@ -2369,9 +2374,9 @@ export default function App() {
                         {/* Agregar línea de receta */}
                         <div style={{...card,padding:16}}>
                           <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:10}}>Agregar ingrediente a la receta</p>
-                          <div style={{display:"flex",gap:8,marginBottom:10}}>
+                          <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap" as const}}>
                             <select value={newRecipeLine.ingredient_id} onChange={e=>setNewRecipeLine(r=>({...r,ingredient_id:e.target.value}))}
-                              style={{flex:2,padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}>
+                              style={{flex:"2 1 180px",padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}>
                               <option value="">— Ingrediente —</option>
                               {ingredients.map(i=><option key={i.id} value={i.id}>{i.name} ({i.unit})</option>)}
                             </select>
@@ -2714,7 +2719,7 @@ export default function App() {
                 {/* Crear usuario */}
                 <div style={{...card,padding:20,marginBottom:20}}>
                   <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar nuevo usuario</p>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:10}}>
                     <input placeholder="Nombre completo" value={newUser.name} onChange={e=>setNewUser(u=>({...u,name:e.target.value}))}
                       style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
                     <input placeholder="Email" type="email" value={newUser.email} onChange={e=>setNewUser(u=>({...u,email:e.target.value}))}
@@ -2749,13 +2754,13 @@ export default function App() {
                     <p style={{fontSize:13,color:MUTED,fontWeight:600,padding:"8px 0"}}>No hay usuarios aún</p>
                   )}
                   {adminUsers.map(u=>(
-                    <div key={u.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 0",borderBottom:`1px solid ${BORDER}`}}>
+                    <div key={u.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 0",borderBottom:`1px solid ${BORDER}`,flexWrap:"wrap" as const}}>
                       <div style={{width:40,height:40,borderRadius:"50%",background:roleBg[u.role],display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
                         <span style={{fontSize:15,fontWeight:900,color:roleFg[u.role]}}>{u.name.charAt(0).toUpperCase()}</span>
                       </div>
-                      <div style={{flex:1,minWidth:0}}>
+                      <div style={{flex:"1 1 150px",minWidth:0}}>
                         <p style={{fontSize:14,fontWeight:700,color:DARK,marginBottom:2}}>{u.name}</p>
-                        <p style={{fontSize:12,color:MUTED,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" as const}}>{u.email||"—"}</p>
+                        <p style={{fontSize:12,color:MUTED,fontWeight:600,wordBreak:"break-word" as const}}>{u.email||"—"}</p>
                       </div>
                       {editRole?.id===u.id ? (
                         <div style={{display:"flex",gap:6,alignItems:"center"}}>
