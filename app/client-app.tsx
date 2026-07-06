@@ -89,6 +89,23 @@ input,select,textarea{min-width:0;max-width:100%;box-sizing:border-box}
 @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+/* Mapa de mesas: tarjetas más grandes en tablet/desktop, hover solo con mouse */
+.mesa-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+@media(min-width:700px){.mesa-grid{grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}}
+.mesa-card{transition:transform .15s,box-shadow .15s}
+@media(hover:hover){.mesa-card:hover{transform:translateY(-3px);box-shadow:0 12px 28px rgba(42,26,31,0.16)!important}}
+
+/* Admin: dos columnas en desktop (formularios a la izquierda, contenido a la derecha) */
+.admin-2col{display:block}
+.stats-2col{display:block}
+.admin-2col-r{display:block}
+@media(min-width:1000px){
+  .admin-2col{display:grid;grid-template-columns:400px minmax(0,1fr);gap:20px;align-items:start}
+  .admin-2col-r{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:20px;align-items:start}
+  .admin-side{position:sticky;top:76px}
+  .stats-2col{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+}
 `;
 
 export default function App() {
@@ -1093,36 +1110,69 @@ export default function App() {
     [...catList, ...[...new Set(prods.map(p=>p.category))].filter(c=>!catList.includes(c))];
 
   const renderMesaMap = (orders: Order[], onPick:(m:string)=>void, selected?: string|null) => (
-    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:10}}>
+    <div className="mesa-grid">
       {mesasList.map(m=>{
         const mo = mesaOrdersOf(orders, m);
         const libre = mo.length===0;
         const allListo = !libre && mo.every(o=>o.status==="listo");
         const total = mo.reduce((s,o)=>s+o.total,0);
         const isSel = selected===m;
+        const stateColor = libre ? "#C9B99F" : allListo ? GREEN : GOLD;
+        const stateText  = libre ? "#A08D75" : allListo ? GREEN : "#8A6210";
+        const stateLabel = libre ? "Libre" : allListo ? "Por cobrar" : "En cocina";
+        const oldest = mo.length ? mo.reduce((a,b)=>new Date(a.created_at)<new Date(b.created_at)?a:b) : null;
+        const isLlevar = /llevar/i.test(m), isDelivery = /delivery|domicilio/i.test(m);
+        void tick; // el tiempo de espera se refresca cada minuto
         return (
-          <button key={m} onClick={()=>onPick(m)} style={{
-            textAlign:"left" as const, fontFamily:FONT, cursor:"pointer", minHeight:92,
-            background: libre ? CARD : allListo ? "rgba(47,125,50,0.10)" : "rgba(181,137,74,0.16)",
-            border:`2px solid ${isSel ? RED : libre ? BORDER : allListo ? GREEN : GOLD}`,
-            borderRadius:14, padding:"12px 14px",
-            boxShadow: isSel ? "0 4px 14px rgba(122,30,58,0.25)" : "none",
+          <button key={m} onClick={()=>onPick(m)} className="mesa-card" style={{
+            position:"relative" as const, textAlign:"left" as const, fontFamily:FONT, cursor:"pointer",
+            background: libre ? "#FBF6ED" : "#fff",
+            border:`2px solid ${isSel ? RED : libre ? "#E4D7C3" : stateColor}`,
+            borderRadius:18, padding:"16px 14px 13px", minHeight:120, overflow:"hidden",
+            boxShadow: isSel ? "0 6px 18px rgba(122,30,58,0.28)" : libre ? "none" : `0 4px 14px ${stateColor}30`,
           }}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,marginBottom:6}}>
-              <span style={{fontSize:15,fontWeight:900,color:DARK}}>{m}</span>
-              <span style={{fontSize:10,fontWeight:800,textTransform:"uppercase" as const,letterSpacing:"0.04em",
-                color: libre ? MUTED : allListo ? GREEN : "#8A6210"}}>
-                {libre ? "Libre" : allListo ? "Por cobrar" : "En cocina"}
+            {/* Franja de estado */}
+            <div style={{position:"absolute" as const,top:0,left:0,right:0,height:5,background:libre?"transparent":stateColor}}/>
+
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,marginBottom:8}}>
+              {/* Ícono: mesa con sillas, o take-away/delivery */}
+              {isLlevar || isDelivery ? (
+                <span style={{fontSize:26,lineHeight:1}}>{isLlevar?"🥡":"🛵"}</span>
+              ) : (
+                <svg width="30" height="30" viewBox="0 0 40 40" aria-hidden="true">
+                  <circle cx="20" cy="6"  r="4.5" fill={stateColor} opacity="0.4"/>
+                  <circle cx="20" cy="34" r="4.5" fill={stateColor} opacity="0.4"/>
+                  <circle cx="6"  cy="20" r="4.5" fill={stateColor} opacity="0.4"/>
+                  <circle cx="34" cy="20" r="4.5" fill={stateColor} opacity="0.4"/>
+                  <circle cx="20" cy="20" r="10.5" fill={stateColor}/>
+                </svg>
+              )}
+              <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:10,fontWeight:800,textTransform:"uppercase" as const,letterSpacing:"0.05em",
+                color:stateText,background:libre?"rgba(160,141,117,0.12)":`${stateColor}1C`,borderRadius:99,padding:"4px 9px",whiteSpace:"nowrap" as const}}>
+                <span style={{width:7,height:7,borderRadius:"50%",background:stateColor,flexShrink:0,
+                  animation:allListo?"pulse 1.2s ease infinite":undefined}}/>
+                {stateLabel}
               </span>
             </div>
+
+            <p style={{fontSize:17,fontWeight:900,color:libre?"#8F7E66":DARK,letterSpacing:"-0.01em",marginBottom:3}}>{m}</p>
+
             {libre ? (
-              <span style={{fontSize:12,fontWeight:600,color:MUTED}}>Sin pedidos</span>
+              <p style={{fontSize:12,fontWeight:600,color:"#B3A184"}}>Disponible</p>
             ) : (
               <>
-                <p style={{fontSize:18,fontWeight:900,color:DARK,lineHeight:1,marginBottom:4}}>{$(total)}</p>
-                <p style={{fontSize:11,fontWeight:700,color:MUTED,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" as const}}>
-                  {mo.map(o=>o.customer_name||`#${o.order_number}`).join(" · ")}
-                </p>
+                <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8,flexWrap:"wrap" as const}}>
+                  <span style={{fontSize:20,fontWeight:900,color:DARK,lineHeight:1}}>{$(total)}</span>
+                  {oldest && <span style={{fontSize:11,fontWeight:700,color:kitchenTimeColor(Math.floor((Date.now()-new Date(oldest.created_at).getTime())/60000))}}>⏱ {elapsed(oldest.created_at)}</span>}
+                </div>
+                <div style={{display:"flex",gap:4,flexWrap:"wrap" as const}}>
+                  {mo.slice(0,3).map(o=>(
+                    <span key={o.id} style={{fontSize:11,fontWeight:700,color:DARK,background:CREAM,border:`1px solid ${BORDER}`,borderRadius:99,padding:"3px 9px",maxWidth:"100%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" as const}}>
+                      {o.customer_name||`#${o.order_number}`}
+                    </span>
+                  ))}
+                  {mo.length>3 && <span style={{fontSize:11,fontWeight:800,color:MUTED,padding:"3px 2px"}}>+{mo.length-3}</span>}
+                </div>
               </>
             )}
           </button>
@@ -1254,7 +1304,7 @@ export default function App() {
 
       {/* ── MESERO · MAPA DE MESAS ─────────────────────────────── */}
       {screen==="waiter" && waiterView==="map" && (
-        <div style={{flex:1,padding:16,maxWidth:1100,margin:"0 auto",width:"100%"}}>
+        <div style={{flex:1,padding:16,maxWidth:1200,margin:"0 auto",width:"100%"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap" as const,gap:10}}>
             <div>
               <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:2}}>Módulo</p>
@@ -1893,7 +1943,7 @@ export default function App() {
 
       {/* ── ADMIN ──────────────────────────────────────────────── */}
       {screen==="admin" && (
-        <div style={{padding:16,maxWidth:1000,margin:"0 auto",width:"100%"}}>
+        <div style={{padding:16,maxWidth:1200,margin:"0 auto",width:"100%"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap" as const,gap:10}}>
             <div>
               <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:2}}>Panel</p>
@@ -1928,7 +1978,7 @@ export default function App() {
               </div>
 
               {/* Métricas principales */}
-              <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:20}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:10,marginBottom:20}}>
                 {[
                   {v:$(adminStats?.todayRevenue||0),l:adminMode==="day"?`Facturado el ${adminDate}`:`Facturado en ${adminMonth}`,bg:RED,fg:"#fff"},
                   {v:String(adminStats?.todayCount||0),l:"Pedidos",bg:DARK,fg:"#fff"},
@@ -1942,6 +1992,8 @@ export default function App() {
                 ))}
               </div>
 
+              <div className="stats-2col">
+              <div>
               {/* Transferencia */}
               <div style={{...card,padding:14,marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <p style={{fontSize:13,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em"}}>Transferencia</p>
@@ -2013,7 +2065,9 @@ export default function App() {
                   )}
                 </div>
               )}
+              </div>
 
+              <div>
               {/* Top productos */}
               <div style={{...card,padding:16}}>
                 <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Top productos</p>
@@ -2058,12 +2112,15 @@ export default function App() {
                 })()}
                 {!adminStats && <p style={{fontSize:13,color:MUTED,fontWeight:600,marginTop:8}}>Sin datos aún</p>}
               </div>
+              </div>
+              </div>
             </div>
           )}
 
           {adminSection==="products" && (
-            <div>
+            <div className="admin-2col">
               {/* Agregar producto */}
+              <div className="admin-side">
               <div style={{...card,padding:16,marginBottom:20}}>
                 <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar producto</p>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
@@ -2084,6 +2141,7 @@ export default function App() {
                   style={{...btn(RED,"#fff",!newProd.name||!newProd.price),width:"100%",height:48}}>
                   Agregar producto
                 </button>
+              </div>
               </div>
 
               {/* Lista productos */}
@@ -2200,6 +2258,8 @@ export default function App() {
                         ))}
                       </div>
 
+                      <div className="admin-2col-r">
+                      <div>
                       {/* Banner alerta crítica */}
                       {critical.length>0 && (
                         <div style={{background:"#FFEBEE",border:"1.5px solid #C62828",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}>
@@ -2307,8 +2367,10 @@ export default function App() {
                           })}
                         </div>
                       </div>
+                      </div>
 
                       {/* Agregar ingrediente */}
+                      <div className="admin-side">
                       <div style={{...card,padding:16}}>
                         <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar ingrediente</p>
                         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
@@ -2325,6 +2387,8 @@ export default function App() {
                           style={{...btn(RED,"#fff",!newIngr.name||!newIngr.stock_current),width:"100%",height:44,fontSize:13}}>
                           Agregar ingrediente
                         </button>
+                      </div>
+                      </div>
                       </div>
                     </div>
                   );
@@ -2523,6 +2587,8 @@ export default function App() {
                   ))}
                 </div>
 
+                <div className="admin-2col">
+                <div className="admin-side">
                 {/* Agregar gasto */}
                 <div style={{...card,padding:16,marginBottom:20}}>
                   <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Registrar gasto</p>
@@ -2543,7 +2609,9 @@ export default function App() {
                     Registrar gasto
                   </button>
                 </div>
+                </div>
 
+                <div>
                 {/* Lista de gastos del período */}
                 <div style={{...card,padding:16,marginBottom:20}}>
                   <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Gastos del período ({expenses.length})</p>
@@ -2611,6 +2679,8 @@ export default function App() {
                     Agregar gasto fijo
                   </button>
                 </div>
+                </div>
+                </div>
               </div>
             );
           })()}
@@ -2649,6 +2719,8 @@ export default function App() {
                   </div>
                 )}
 
+                <div className="admin-2col">
+                <div className="admin-side">
                 {/* Resumen */}
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:16}}>
                   {[
@@ -2676,6 +2748,7 @@ export default function App() {
                     </div>
                   </div>
                 )}
+                </div>
 
                 {/* Lista */}
                 <div style={{...card,padding:16}}>
@@ -2706,6 +2779,7 @@ export default function App() {
                     ))}
                   </div>
                 </div>
+                </div>
               </div>
             );
           })()}
@@ -2715,8 +2789,9 @@ export default function App() {
             const roleBg: Record<Role,string> = { waiter:DARK, kitchen:GOLD, cashier:GREEN, admin:RED };
             const roleFg: Record<Role,string> = { waiter:"#fff", kitchen:DARK, cashier:"#fff", admin:"#fff" };
             return (
-              <div>
+              <div className="admin-2col">
                 {/* Crear usuario */}
+                <div className="admin-side">
                 <div style={{...card,padding:20,marginBottom:20}}>
                   <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar nuevo usuario</p>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:10}}>
@@ -2742,6 +2817,7 @@ export default function App() {
                       {userMsg}
                     </div>
                   )}
+                </div>
                 </div>
 
                 {/* Lista de usuarios */}
@@ -2801,6 +2877,7 @@ export default function App() {
                 </div>
               )}
 
+              <div className="stats-2col">
               {/* Mesas */}
               <div style={{...card,padding:16,marginBottom:20}}>
                 <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:4}}>Mesas ({cfgTables.length})</p>
@@ -2864,12 +2941,14 @@ export default function App() {
                     style={{...btn(RED,"#fff",!newCatName.trim()),padding:"0 18px",height:46,whiteSpace:"nowrap" as const}}>Agregar</button>
                 </div>
               </div>
+              </div>
             </div>
           )}
 
           {adminSection==="notes" && (
-            <div>
+            <div className="admin-2col">
               {/* Agregar nota */}
+              <div className="admin-side">
               <div style={{...card,padding:16,marginBottom:20}}>
                 <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar nota / extra</p>
                 <select value={newNote.category} onChange={e=>setNewNote(n=>({...n,category:e.target.value}))}
@@ -2886,6 +2965,7 @@ export default function App() {
                     Agregar
                   </button>
                 </div>
+              </div>
               </div>
 
               {/* Lista por categoría */}
