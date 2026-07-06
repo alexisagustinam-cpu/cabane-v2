@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import { createClient, type Session } from "@supabase/supabase-js";
 
 let _db: ReturnType<typeof createClient> | null = null;
@@ -23,7 +23,7 @@ interface Waste { id: string; product_name: string; quantity: number; unit_price
 interface Expense { id: string; category: string; description: string; amount: number; expense_date: string; creator_name?: string; created_at: string }
 interface FixedExpense { id: string; name: string; category: string; amount: number; active: boolean }
 interface Payment { order_id: string; method: string; amount: number; created_at?: string }
-interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[]; expensesTotal:number; fixedTotal:number; wasteTotal:number }
+interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[]; expensesTotal:number; fixedTotal:number; wasteTotal:number; prevRevenue:number; prevCount:number; categoryBreakdown:{name:string;revenue:number}[]; expenseBreakdown:{name:string;amount:number}[]; weekdayData:number[] }
 
 // AudioContext único, desbloqueado con el primer toque — los navegadores
 // bloquean el audio sin interacción previa y el beep fallaba en silencio.
@@ -152,9 +152,11 @@ export default function App() {
   const [newRecipeLine, setNewRecipeLine] = useState({ingredient_id:"",quantity:""});
   const [notesBycat, setNotesByCat] = useState<Record<string,{id:string;note:string}[]>>({});
   const [newNote, setNewNote] = useState({category:CAT_ORDER[0],note:""});
-  const [adminMode, setAdminMode] = useState<"day"|"month">("day");
+  const [adminMode, setAdminMode] = useState<"day"|"week"|"month"|"custom">("day");
   const [adminDate, setAdminDate] = useState(()=>new Date().toISOString().slice(0,10));
   const [adminMonth, setAdminMonth] = useState(()=>new Date().toISOString().slice(0,7));
+  const [customStart, setCustomStart] = useState(()=>new Date().toISOString().slice(0,10));
+  const [customEnd, setCustomEnd] = useState(()=>new Date().toISOString().slice(0,10));
   const [adminLoading, setAdminLoading] = useState(false);
   const [newProd, setNewProd] = useState({name:"",category:CAT_ORDER[0],price:"",description:""});
   const [editProd, setEditProd] = useState<{id:string,name:string,category:string,price:string,description:string}|null>(null);
@@ -518,35 +520,87 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // Rango de fechas según el selector día/mes del admin
+  // Rango de fechas según el selector día/semana/mes/personalizado del admin
   function adminRange(): { start: string; end: string } {
     if (adminMode==="day") {
       const d = new Date(adminDate+"T00:00:00");
       const de = new Date(adminDate+"T00:00:00"); de.setDate(de.getDate()+1);
       return { start: d.toISOString(), end: de.toISOString() };
     }
+    if (adminMode==="week") {
+      // Semana lunes-domingo que contiene la fecha elegida
+      const d = new Date(adminDate+"T00:00:00");
+      d.setDate(d.getDate() - ((d.getDay()+6)%7));
+      const e = new Date(d); e.setDate(e.getDate()+7);
+      return { start: d.toISOString(), end: e.toISOString() };
+    }
+    if (adminMode==="custom") {
+      const s = new Date(customStart+"T00:00:00");
+      const e = new Date(customEnd+"T00:00:00"); e.setDate(e.getDate()+1);
+      if (e <= s) { const e2 = new Date(s); e2.setDate(e2.getDate()+1); return { start: s.toISOString(), end: e2.toISOString() }; }
+      return { start: s.toISOString(), end: e.toISOString() };
+    }
     const [y,m] = adminMonth.split("-").map(Number);
     return { start: new Date(y,m-1,1).toISOString(), end: new Date(y,m,1).toISOString() };
+  }
+
+  // Etiqueta legible del período seleccionado
+  function periodLabel(): string {
+    if (adminMode==="day") return adminDate;
+    if (adminMode==="month") return adminMonth;
+    const { start, end } = adminRange();
+    const f = (d: Date) => d.toLocaleDateString("es-EC",{day:"2-digit",month:"2-digit"});
+    return `${f(new Date(start))} → ${f(new Date(new Date(end).getTime()-86400000))}`;
   }
 
   async function loadAdminStats() {
     setAdminLoading(true);
     const { start, end } = adminRange();
 
-    const [{ data: periodOrders }, { data: items }, { data: exRows }, { data: fxRows }, { data: wRows }] = await Promise.all([
+    // Período anterior de la misma duración, para comparar crecimiento
+    const spanMs = new Date(end).getTime() - new Date(start).getTime();
+    const prevStart = new Date(new Date(start).getTime()-spanMs).toISOString();
+
+    const [{ data: periodOrders }, { data: items }, { data: exRows }, { data: fxRows }, { data: wRows }, { data: prevOrders }, { data: prodCats }] = await Promise.all([
       getDB().from("orders").select("id,total,created_at").eq("status","pagado").gte("created_at",start).lt("created_at",end),
-      getDB().from("order_items").select("product_name,quantity,unit_price,orders!inner(status,created_at)")
+      getDB().from("order_items").select("product_id,product_name,quantity,unit_price,orders!inner(status,created_at)")
         .eq("orders.status","pagado").gte("orders.created_at",start).lt("orders.created_at",end),
       // Si las tablas de fase 3/4 no existen aún, estas queries devuelven null y se ignoran
-      getDB().from("expenses").select("amount").gte("expense_date",start.slice(0,10)).lt("expense_date",end.slice(0,10)),
+      getDB().from("expenses").select("amount,category").gte("expense_date",start.slice(0,10)).lt("expense_date",end.slice(0,10)),
       getDB().from("fixed_expenses").select("amount").eq("active",true),
       getDB().from("waste").select("quantity,unit_price").gte("created_at",start).lt("created_at",end),
+      getDB().from("orders").select("total").eq("status","pagado").gte("created_at",prevStart).lt("created_at",start),
+      getDB().from("products").select("id,category"),
     ]);
 
     const expensesTotal = (exRows||[]).reduce((s:number,e:{amount:number})=>s+e.amount,0);
     // Los gastos fijos son mensuales — solo entran al reporte por mes
     const fixedTotal = adminMode==="month" ? (fxRows||[]).reduce((s:number,e:{amount:number})=>s+e.amount,0) : 0;
     const wasteTotal = (wRows||[]).reduce((s:number,w:{quantity:number;unit_price:number})=>s+w.quantity*w.unit_price,0);
+
+    // ¿A dónde se va la plata? — gastos agrupados por categoría
+    const exCatMap: Record<string,number> = {};
+    (exRows||[]).forEach((e:{amount:number;category:string}) => { exCatMap[e.category||"Otros"]=(exCatMap[e.category||"Otros"]||0)+e.amount; });
+    const expenseBreakdown = Object.entries(exCatMap).map(([name,amount])=>({name,amount})).sort((a,b)=>b.amount-a.amount);
+
+    // ¿De dónde vienen las ventas? — ingresos por categoría del menú
+    const catOf: Record<string,string> = {};
+    (prodCats||[]).forEach((p:{id:string;category:string}) => { catOf[p.id]=p.category; });
+    const catMap: Record<string,number> = {};
+    (items||[]).forEach((i:{product_id:string;quantity:number;unit_price:number}) => {
+      const c = catOf[i.product_id]||"Otros";
+      catMap[c]=(catMap[c]||0)+i.quantity*i.unit_price;
+    });
+    const categoryBreakdown = Object.entries(catMap).map(([name,revenue])=>({name,revenue})).sort((a,b)=>b.revenue-a.revenue);
+
+    // Ventas por día de la semana (lunes primero)
+    const weekdayData = Array(7).fill(0);
+    (periodOrders||[]).forEach((o:{total:number;created_at:string}) => {
+      weekdayData[(new Date(o.created_at).getDay()+6)%7] += o.total;
+    });
+
+    const prevRevenue = (prevOrders||[]).reduce((s:number,o:{total:number})=>s+o.total,0);
+    const prevCount = (prevOrders||[]).length;
 
     // payments no tiene created_at — filtrar por order_id de los pedidos del período
     const periodIds = (periodOrders||[]).map((o:{id:string})=>o.id);
@@ -593,6 +647,11 @@ export default function App() {
       expensesTotal,
       fixedTotal,
       wasteTotal,
+      prevRevenue,
+      prevCount,
+      categoryBreakdown,
+      expenseBreakdown,
+      weekdayData,
     });
     setAdminLoading(false);
   }
@@ -1108,6 +1167,34 @@ export default function App() {
   // Categorías dinámicas + las huérfanas que aún tengan productos
   const catsFor = (prods: Product[]) =>
     [...catList, ...[...new Set(prods.map(p=>p.category))].filter(c=>!catList.includes(c))];
+
+  // Selector de período compartido por Reportes/Pedidos/Gastos/Mermas
+  const periodInputSt = { height:38, padding:"0 12px", borderRadius:10, border:`1.5px solid ${BORDER}`, fontSize:13, fontWeight:600, fontFamily:FONT, color:DARK, background:CARD, outline:"none" };
+  const renderPeriodPicker = (onApply: ()=>void, extra?: ReactNode) => (
+    <div style={{display:"flex",flexWrap:"wrap" as const,gap:8,marginBottom:16,alignItems:"center"}}>
+      {([["day","Día"],["week","Semana"],["month","Mes"],["custom","Rango"]] as const).map(([m,l])=>(
+        <button key={m} onClick={()=>setAdminMode(m)} style={{...btn(adminMode===m?RED:CREAM2,adminMode===m?"#fff":DARK),height:38,padding:"0 14px",fontSize:13}}>{l}</button>
+      ))}
+      {(adminMode==="day"||adminMode==="week") && (
+        <input type="date" value={adminDate} onChange={e=>setAdminDate(e.target.value)} style={periodInputSt}/>
+      )}
+      {adminMode==="month" && (
+        <input type="month" value={adminMonth} onChange={e=>setAdminMonth(e.target.value)} style={periodInputSt}/>
+      )}
+      {adminMode==="custom" && (
+        <>
+          <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)} style={periodInputSt}/>
+          <span style={{fontSize:13,fontWeight:800,color:MUTED}}>→</span>
+          <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)} style={periodInputSt}/>
+        </>
+      )}
+      <button onClick={onApply} style={{...btn(DARK,"#fff"),height:38,padding:"0 16px",fontSize:13}}>Aplicar</button>
+      {(adminMode==="week"||adminMode==="custom") && (
+        <span style={{fontSize:12,fontWeight:800,color:MUTED,background:CREAM2,borderRadius:99,padding:"6px 12px"}}>{periodLabel()}</span>
+      )}
+      {extra}
+    </div>
+  );
 
   const renderMesaMap = (orders: Order[], onPick:(m:string)=>void, selected?: string|null) => (
     <div className="mesa-grid">
@@ -1965,32 +2052,33 @@ export default function App() {
           {adminSection==="stats" && (
             <div>
               {/* Selector período */}
-              <div style={{display:"flex",flexWrap:"wrap" as const,gap:8,marginBottom:16,alignItems:"center"}}>
-                <button onClick={()=>setAdminMode("day")} style={{...btn(adminMode==="day"?RED:CREAM2,adminMode==="day"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por día</button>
-                <button onClick={()=>setAdminMode("month")} style={{...btn(adminMode==="month"?RED:CREAM2,adminMode==="month"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por mes</button>
-                {adminMode==="day"
-                  ? <input type="date" value={adminDate} onChange={e=>setAdminDate(e.target.value)}
-                      style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
-                  : <input type="month" value={adminMonth} onChange={e=>setAdminMonth(e.target.value)}
-                      style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
-                }
-                <button onClick={loadAdminStats} style={{...btn(CREAM2,DARK),height:38,padding:"0 16px",fontSize:13}}>{adminLoading?"Cargando…":"↻"}</button>
-              </div>
+              {renderPeriodPicker(loadAdminStats)}
 
               {/* Métricas principales */}
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:10,marginBottom:20}}>
-                {[
-                  {v:$(adminStats?.todayRevenue||0),l:adminMode==="day"?`Facturado el ${adminDate}`:`Facturado en ${adminMonth}`,bg:RED,fg:"#fff"},
-                  {v:String(adminStats?.todayCount||0),l:"Pedidos",bg:DARK,fg:"#fff"},
-                  {v:$(adminStats?.payBreakdown.efectivo||0),l:"Efectivo",bg:GOLD,fg:DARK},
-                  {v:$(adminStats?.payBreakdown.tarjeta||0),l:"Tarjeta",bg:GREEN,fg:"#fff"},
-                ].map(({v,l,bg,fg})=>(
-                  <div key={l} style={{background:bg,borderRadius:14,padding:"16px",boxShadow:`0 4px 16px ${bg}33`}}>
-                    <p style={{fontSize:"clamp(20px,4vw,28px)",fontWeight:900,color:fg,lineHeight:1,marginBottom:4}}>{v}</p>
-                    <p style={{fontSize:11,fontWeight:700,color:fg,opacity:0.65,textTransform:"uppercase" as const,letterSpacing:"0.1em"}}>{l}</p>
+              {(()=>{
+                const rev = adminStats?.todayRevenue||0;
+                const count = adminStats?.todayCount||0;
+                const prev = adminStats?.prevRevenue||0;
+                const growth = prev>0 ? ((rev-prev)/prev)*100 : null;
+                const growthLabel = adminMode==="day"?"vs día anterior":adminMode==="week"?"vs semana anterior":adminMode==="month"?"vs mes anterior":"vs período anterior";
+                return (
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:20}}>
+                    {[
+                      {v:$(rev),l:`Facturado — ${periodLabel()}`,bg:RED,fg:"#fff"},
+                      {v:String(count),l:"Pedidos",bg:DARK,fg:"#fff"},
+                      {v:$(count?rev/count:0),l:"Ticket promedio",bg:"#4A3540",fg:"#fff"},
+                      {v:growth===null?"—":`${growth>=0?"+":""}${growth.toFixed(0)}%`,l:growthLabel,bg:growth===null?CREAM2:growth>=0?GREEN:ALERT_RED,fg:growth===null?MUTED:"#fff"},
+                      {v:$(adminStats?.payBreakdown.efectivo||0),l:"Efectivo",bg:GOLD,fg:DARK},
+                      {v:$(adminStats?.payBreakdown.tarjeta||0),l:"Tarjeta",bg:GREEN,fg:"#fff"},
+                    ].map(({v,l,bg,fg})=>(
+                      <div key={l} style={{background:bg,borderRadius:14,padding:"16px",boxShadow:`0 4px 16px ${bg}33`}}>
+                        <p style={{fontSize:"clamp(18px,4vw,26px)",fontWeight:900,color:fg,lineHeight:1,marginBottom:4}}>{v}</p>
+                        <p style={{fontSize:11,fontWeight:700,color:fg,opacity:0.65,textTransform:"uppercase" as const,letterSpacing:"0.1em"}}>{l}</p>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                );
+              })()}
 
               <div className="stats-2col">
               <div>
@@ -2010,7 +2098,7 @@ export default function App() {
                 return (
                   <div style={{...card,padding:16,marginBottom:20}}>
                     <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:12}}>
-                      Utilidad {adminMode==="day"?"del día":"del mes"}
+                      Utilidad — {adminMode==="day"?"día":adminMode==="week"?"semana":adminMode==="month"?"mes":"período"} {periodLabel()}
                     </p>
                     {[
                       {l:"Ingresos (cobrado)",v:ingresos,c:GREEN,sign:"+"},
@@ -2028,7 +2116,38 @@ export default function App() {
                       <span style={{fontSize:14,fontWeight:800,color:DARK}}>Utilidad</span>
                       <span style={{fontSize:22,fontWeight:900,color:utilidad>=0?GREEN:ALERT_RED}}>{$(utilidad)}</span>
                     </div>
-                    {adminMode==="day" && <p style={{fontSize:11,fontWeight:600,color:MUTED,marginTop:8}}>Los gastos fijos (alquiler, servicios…) solo se restan en el reporte mensual.</p>}
+                    {adminMode!=="month" && <p style={{fontSize:11,fontWeight:600,color:MUTED,marginTop:8}}>Los gastos fijos (alquiler, servicios…) solo se restan en el reporte mensual.</p>}
+                  </div>
+                );
+              })()}
+
+              {/* ¿A dónde se va la plata? */}
+              {(()=>{
+                const rows = [...(adminStats?.expenseBreakdown||[])];
+                if (adminMode==="month" && (adminStats?.fixedTotal||0)>0) rows.push({name:"Gastos fijos (mensual)",amount:adminStats!.fixedTotal});
+                if ((adminStats?.wasteTotal||0)>0) rows.push({name:"Mermas",amount:adminStats!.wasteTotal});
+                rows.sort((a,b)=>b.amount-a.amount);
+                const total = rows.reduce((s,r)=>s+r.amount,0);
+                return (
+                  <div style={{...card,padding:16,marginBottom:20}}>
+                    <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:12}}>¿A dónde se va la plata?</p>
+                    {rows.length===0 ? (
+                      <p style={{fontSize:13,color:MUTED,fontWeight:600}}>Sin gastos registrados en este período</p>
+                    ) : (
+                      <div style={{display:"flex",flexDirection:"column" as const,gap:10}}>
+                        {rows.map(r=>(
+                          <div key={r.name}>
+                            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                              <span style={{fontSize:13,fontWeight:700,color:DARK}}>{r.name}</span>
+                              <span style={{fontSize:13,fontWeight:900,color:ALERT_RED}}>{$(r.amount)} <span style={{color:MUTED,fontWeight:700}}>({total?Math.round(r.amount/total*100):0}%)</span></span>
+                            </div>
+                            <div style={{height:8,background:CREAM,borderRadius:4,overflow:"hidden"}}>
+                              <div style={{height:"100%",width:`${total?(r.amount/total)*100:0}%`,background:ALERT_RED,borderRadius:4,opacity:0.85}}/>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })()}
@@ -2068,6 +2187,31 @@ export default function App() {
               </div>
 
               <div>
+              {/* Ventas por categoría — de dónde vienen las ganancias */}
+              {(()=>{
+                const rows = adminStats?.categoryBreakdown||[];
+                const total = rows.reduce((s,r)=>s+r.revenue,0);
+                if (!rows.length) return null;
+                return (
+                  <div style={{...card,padding:16,marginBottom:16}}>
+                    <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:12}}>¿De dónde vienen las ventas?</p>
+                    <div style={{display:"flex",flexDirection:"column" as const,gap:10}}>
+                      {rows.map((r,i)=>(
+                        <div key={r.name}>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                            <span style={{fontSize:13,fontWeight:700,color:DARK}}>{r.name}</span>
+                            <span style={{fontSize:13,fontWeight:900,color:i===0?RED:DARK}}>{$(r.revenue)} <span style={{color:MUTED,fontWeight:700}}>({total?Math.round(r.revenue/total*100):0}%)</span></span>
+                          </div>
+                          <div style={{height:8,background:CREAM,borderRadius:4,overflow:"hidden"}}>
+                            <div style={{height:"100%",width:`${total?(r.revenue/total)*100:0}%`,background:i===0?RED:GOLD,borderRadius:4}}/>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Top productos */}
               <div style={{...card,padding:16}}>
                 <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Top productos</p>
@@ -2089,7 +2233,7 @@ export default function App() {
 
               {/* Gráfica ventas por hora */}
               <div style={{...card,padding:16,marginTop:16}}>
-                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:16}}>Ventas por hora — {adminMode==="day"?adminDate:adminMonth}</p>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:16}}>Ventas por hora — {periodLabel()}</p>
                 {(()=>{
                   const data = adminStats?.hourlyData||Array(24).fill(0);
                   const max = Math.max(...data, 1);
@@ -2112,6 +2256,28 @@ export default function App() {
                 })()}
                 {!adminStats && <p style={{fontSize:13,color:MUTED,fontWeight:600,marginTop:8}}>Sin datos aún</p>}
               </div>
+
+              {/* Ventas por día de la semana — qué días conviene reforzar */}
+              {adminMode!=="day" && (()=>{
+                const data = adminStats?.weekdayData||Array(7).fill(0);
+                const max = Math.max(...data, 1);
+                const labels = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
+                const best = data.indexOf(Math.max(...data));
+                return (
+                  <div style={{...card,padding:16,marginTop:16}}>
+                    <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:16}}>Ventas por día de la semana</p>
+                    <div style={{display:"flex",alignItems:"flex-end",gap:8,height:130}}>
+                      {data.map((v:number,i:number)=>(
+                        <div key={i} style={{display:"flex",flexDirection:"column" as const,alignItems:"center",flex:1,gap:4}}>
+                          <span style={{fontSize:10,fontWeight:800,color:i===best&&v>0?RED:MUTED}}>{v>0?$(v):""}</span>
+                          <div style={{width:"100%",borderRadius:"6px 6px 0 0",height:`${Math.max((v/max)*90,v>0?4:0)}px`,background:i===best&&v>0?RED:v>0?GOLD:"rgba(196,168,130,0.2)",transition:"height .3s"}}/>
+                          <span style={{fontSize:10,fontWeight:700,color:i===best&&v>0?RED:MUTED}}>{labels[i]}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
               </div>
               </div>
             </div>
@@ -2467,17 +2633,7 @@ export default function App() {
             return (
               <div>
                 {/* Selector período */}
-                <div style={{display:"flex",flexWrap:"wrap" as const,gap:8,marginBottom:16,alignItems:"center"}}>
-                  <button onClick={()=>setAdminMode("day")} style={{...btn(adminMode==="day"?RED:CREAM2,adminMode==="day"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por día</button>
-                  <button onClick={()=>setAdminMode("month")} style={{...btn(adminMode==="month"?RED:CREAM2,adminMode==="month"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por mes</button>
-                  {adminMode==="day"
-                    ? <input type="date" value={adminDate} onChange={e=>setAdminDate(e.target.value)}
-                        style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
-                    : <input type="month" value={adminMonth} onChange={e=>setAdminMonth(e.target.value)}
-                        style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
-                  }
-                  <button onClick={loadHistory} style={{...btn(CREAM2,DARK),height:38,padding:"0 16px",fontSize:13}}>↻</button>
-                </div>
+                {renderPeriodPicker(loadHistory)}
 
                 {/* Resumen + filtro estado */}
                 <div style={{display:"flex",gap:10,flexWrap:"wrap" as const,alignItems:"center",marginBottom:16}}>
@@ -2552,17 +2708,7 @@ export default function App() {
             return (
               <div>
                 {/* Selector período */}
-                <div style={{display:"flex",flexWrap:"wrap" as const,gap:8,marginBottom:16,alignItems:"center"}}>
-                  <button onClick={()=>setAdminMode("day")} style={{...btn(adminMode==="day"?RED:CREAM2,adminMode==="day"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por día</button>
-                  <button onClick={()=>setAdminMode("month")} style={{...btn(adminMode==="month"?RED:CREAM2,adminMode==="month"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por mes</button>
-                  {adminMode==="day"
-                    ? <input type="date" value={adminDate} onChange={e=>setAdminDate(e.target.value)}
-                        style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
-                    : <input type="month" value={adminMonth} onChange={e=>setAdminMonth(e.target.value)}
-                        style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
-                  }
-                  <button onClick={loadExpenses} style={{...btn(CREAM2,DARK),height:38,padding:"0 16px",fontSize:13}}>↻</button>
-                </div>
+                {renderPeriodPicker(loadExpenses)}
 
                 {expenseMsg && (
                   <div style={{marginBottom:14,borderRadius:12,padding:"12px 16px",fontSize:14,fontWeight:700,
@@ -2576,7 +2722,7 @@ export default function App() {
                 {/* Resumen */}
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:20}}>
                   {[
-                    {v:$(totalVar),l:adminMode==="day"?"Gastos del día":"Gastos del mes",bg:ALERT_RED,fg:"#fff"},
+                    {v:$(totalVar),l:`Gastos — ${periodLabel()}`,bg:ALERT_RED,fg:"#fff"},
                     {v:$(totalFixed),l:"Gastos fijos / mes",bg:DARK,fg:"#fff"},
                     ...(adminMode==="month"?[{v:$(totalVar+totalFixed),l:"Total del mes",bg:GOLD,fg:DARK}]:[]),
                   ].map(({v,l,bg,fg})=>(
@@ -2694,21 +2840,12 @@ export default function App() {
             return (
               <div>
                 {/* Selector período + registrar */}
-                <div style={{display:"flex",flexWrap:"wrap" as const,gap:8,marginBottom:16,alignItems:"center"}}>
-                  <button onClick={()=>setAdminMode("day")} style={{...btn(adminMode==="day"?RED:CREAM2,adminMode==="day"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por día</button>
-                  <button onClick={()=>setAdminMode("month")} style={{...btn(adminMode==="month"?RED:CREAM2,adminMode==="month"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por mes</button>
-                  {adminMode==="day"
-                    ? <input type="date" value={adminDate} onChange={e=>setAdminDate(e.target.value)}
-                        style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
-                    : <input type="month" value={adminMonth} onChange={e=>setAdminMonth(e.target.value)}
-                        style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
-                  }
-                  <button onClick={loadWaste} style={{...btn(CREAM2,DARK),height:38,padding:"0 16px",fontSize:13}}>↻</button>
+                {renderPeriodPicker(loadWaste, (
                   <button onClick={()=>{setNewWaste({product_id:"",quantity:"1",reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
                     style={{...btn(RED,"#fff"),height:38,padding:"0 16px",fontSize:13,marginLeft:"auto"}}>
                     + Registrar baja
                   </button>
-                </div>
+                ))}
 
                 {wasteMsg && (
                   <div style={{marginBottom:14,borderRadius:12,padding:"12px 16px",fontSize:14,fontWeight:700,
