@@ -17,13 +17,28 @@ interface Product { id: string; name: string; category: string; price: number; d
 interface OrderItem { id: string; product_id: string; product_name: string; quantity: number; unit_price: number; notes?: string }
 interface Ingredient { id: string; name: string; unit: string; stock_current: number; stock_min: number }
 interface Recipe { id: string; product_id: string; ingredient_id: string; quantity: number }
-interface Order { id: string; order_number: number; table_label: string; status: Status; total: number; created_at: string; table_note?: string; order_items?: OrderItem[] }
+interface Order { id: string; order_number: number; table_label: string; status: Status; total: number; created_at: string; table_note?: string; customer_name?: string; order_items?: OrderItem[] }
 interface CartItem extends Product { qty: number; notes: string[]; customNote: string }
-interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[] }
+interface Waste { id: string; product_name: string; quantity: number; unit_price: number; reason: string; notes?: string; reporter_name?: string; created_at: string }
+interface Expense { id: string; category: string; description: string; amount: number; expense_date: string; creator_name?: string; created_at: string }
+interface FixedExpense { id: string; name: string; category: string; amount: number; active: boolean }
+interface Payment { order_id: string; method: string; amount: number; created_at?: string }
+interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[]; expensesTotal:number; fixedTotal:number; wasteTotal:number }
 
+// AudioContext único, desbloqueado con el primer toque — los navegadores
+// bloquean el audio sin interacción previa y el beep fallaba en silencio.
+let _audioCtx: AudioContext | null = null;
+function unlockAudio() {
+  try {
+    if (!_audioCtx) _audioCtx = new AudioContext();
+    if (_audioCtx.state === "suspended") _audioCtx.resume();
+  } catch(_) { /* silently ignore */ }
+}
 function playBeep() {
   try {
-    const ctx = new AudioContext();
+    unlockAudio();
+    const ctx = _audioCtx;
+    if (!ctx) return;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.connect(gain); gain.connect(ctx.destination);
@@ -44,22 +59,22 @@ function elapsed(created_at: string): string {
 const $ = (n: number) => `$${n.toFixed(2)}`;
 const MESAS = ["Mesa 0","Mesa 1","Mesa 2","Mesa 3","Mesa 4","Mesa 5","Mesa 6","Mesa 7","Mesa 8","Mesa 9","Para llevar","Delivery"];
 const CAT_ORDER = ["Sánduches","Desayunos","Clásicos","Ensaladas","Tablitas","Para Compartir","Bebidas","Cafés","Postres"];
-const NOTES_BY_CAT: Record<string, string[]> = {
-  "Sánduches":      ["Sin cebolla","Sin mayonesa","Sin tomate","Sin lechuga","Sin pepinillo","Extra queso","Extra salsa","Bien tostado","Sin picante"],
-  "Clásicos":       ["Sin cebolla","Sin mayonesa","Sin tomate","Sin lechuga","Sin pepinillo","Extra queso","Extra salsa","Bien tostado","Sin picante"],
-  "Desayunos":      ["Sin sal","Huevos revueltos","Huevos fritos","Sin tocino","Extra fruta","Bien cocido","Término medio"],
-  "Ensaladas":      ["Sin cebolla","Sin aderezo","Aderezo aparte","Extra pollo","Sin queso","Sin crutones"],
-  "Tablitas":       ["Sin aceitunas","Sin pepinillo","Extra queso","Sin salami","Pan extra"],
-  "Para Compartir": ["Sin aceitunas","Sin pepinillo","Extra queso","Sin salami","Pan extra"],
-  "Bebidas":        ["Sin azúcar","Poca azúcar","Extra dulce","Sin hielo","Extra hielo","Leche de avena","Sin leche"],
-  "Cafés":          ["Sin azúcar","Poca azúcar","Extra dulce","Sin hielo","Extra hielo","Leche de avena","Sin leche"],
-  "Postres":        ["Sin crema","Extra salsa","Porción pequeña"],
-};
+// Fecha local YYYY-MM-DD (toISOString daría la fecha UTC, que cambia a las 19h en Ecuador)
+function localDateStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+const WASTE_REASONS = ["Se quemó","Se cayó","Mal preparado","Devuelto por cliente","Caducado","Otro"];
+const EXPENSE_CATS = ["Compras / Insumos","Alquiler","Servicios (luz, agua, internet)","Sueldos","Mantenimiento","Otros"];
 const ROLE_SCREENS: Record<Role, string[]> = { waiter:["waiter"], kitchen:["kitchen"], cashier:["cashier"], admin:["waiter","kitchen","cashier","admin"] };
 const SL: Record<string,string> = { waiter:"Mesero", kitchen:"Cocina", cashier:"Caja", admin:"Admin" };
 
 const FONT = "'Nunito', sans-serif";
 const RED = "#7A1E3A", DARK = "#2A1A1F", CREAM = "#EDE0CE", GOLD = "#B5894A", GREEN = "#2F7D32", MUTED = "#7A6555", BORDER = "#C4A882", CARD = "#F7F0E6", CREAM2 = "#D4BFA0";
+const ORANGE = "#E8720C", ALERT_RED = "#C62828";
+
+// Nomenclatura de tiempos de cocina: verde 0-10 min, naranja 10-15, rojo +15 (parpadea a los 20)
+const kitchenTimeColor = (mins: number) => mins < 10 ? GREEN : mins < 15 ? ORANGE : ALERT_RED;
 
 const GLOBAL_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap');
@@ -101,12 +116,13 @@ export default function App() {
   const [cPayBreakdown, setCPayBreakdown] = useState({efectivo:0,tarjeta:0,transferencia:0});
   const [cLoading, setCLoading] = useState(false);
   const [paying, setPaying] = useState<string|null>(null);
+  const [payError, setPayError] = useState("");
   const [expandedOrder, setExpandedOrder] = useState<string|null>(null);
   const [splitModal, setSplitModal] = useState<Order|null>(null);
   const [splitAmounts, setSplitAmounts] = useState({efectivo:"",tarjeta:"",transferencia:""});
   const [adminStats, setAdminStats] = useState<AdminStats|null>(null);
   const [adminProducts, setAdminProducts] = useState<Product[]>([]);
-  const [adminSection, setAdminSection] = useState<"stats"|"products"|"notes"|"inventory"|"users">("stats");
+  const [adminSection, setAdminSection] = useState<"stats"|"products"|"notes"|"inventory"|"users"|"waste"|"expenses"|"history"|"config">("stats");
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [invTab, setInvTab] = useState<"stock"|"recetas">("stock");
@@ -135,6 +151,44 @@ export default function App() {
   const [editRole, setEditRole] = useState<{id:string;role:Role}|null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{msg:string;onOk:()=>void}|null>(null);
   const askConfirm = (msg:string, onOk:()=>void) => setConfirmDialog({msg,onOk});
+  // Fase 2: mapa de mesas, nombre de cliente, cobro por mesa y mover pedidos
+  const [waiterView, setWaiterView] = useState<"map"|"order">("map");
+  const [wOrders, setWOrders] = useState<Order[]>([]);
+  const [customerName, setCustomerName] = useState("");
+  const [cashierMesa, setCashierMesa] = useState<string|null>(null);
+  const [mesaPayModal, setMesaPayModal] = useState<{mesa:string;orders:Order[]}|null>(null);
+  const [moveOrder, setMoveOrder] = useState<Order|null>(null);
+  // Fase 3: mermas (productos dados de baja)
+  const [wasteList, setWasteList] = useState<Waste[]>([]);
+  const [wasteModal, setWasteModal] = useState(false);
+  const [newWaste, setNewWaste] = useState({product_id:"",quantity:"1",reason:WASTE_REASONS[0],notes:""});
+  const [wasteMsg, setWasteMsg] = useState("");
+  const [wasteSaving, setWasteSaving] = useState(false);
+  // Fase 4: gastos, gastos fijos e historial de pedidos
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [fixedExpenses, setFixedExpenses] = useState<FixedExpense[]>([]);
+  const [newExpense, setNewExpense] = useState({category:EXPENSE_CATS[0],description:"",amount:"",expense_date:new Date().toISOString().slice(0,10)});
+  const [newFixed, setNewFixed] = useState({name:"",category:"Alquiler",amount:""});
+  const [expenseMsg, setExpenseMsg] = useState("");
+  const [histOrders, setHistOrders] = useState<Order[]>([]);
+  const [histPayments, setHistPayments] = useState<Record<string,Payment[]>>({});
+  const [histStatus, setHistStatus] = useState<"pagado"|"cancelado">("pagado");
+  const [histExpanded, setHistExpanded] = useState<string|null>(null);
+  // Fase 5: mesas/categorías dinámicas, cierre de caja, indicador de conexión
+  const [mesasList, setMesasList] = useState<string[]>(MESAS);
+  const [catList, setCatList] = useState<string[]>(CAT_ORDER);
+  const [cfgTables, setCfgTables] = useState<{id:string;label:string;sort:number;active:boolean}[]>([]);
+  const [cfgCats, setCfgCats] = useState<{id:string;name:string;sort:number}[]>([]);
+  const [newMesaLabel, setNewMesaLabel] = useState("");
+  const [newCatName, setNewCatName] = useState("");
+  const [cfgMsg, setCfgMsg] = useState("");
+  const [online, setOnline] = useState(true);
+  const [closureModal, setClosureModal] = useState(false);
+  const [closureCash, setClosureCash] = useState("");
+  const [closureNotes, setClosureNotes] = useState("");
+  const [closureSaved, setClosureSaved] = useState<{counted_cash:number;difference:number;closer_name?:string}|null>(null);
+  const [closureMsg, setClosureMsg] = useState("");
+  const [dayClosure, setDayClosure] = useState<{expected_cash:number;counted_cash:number;difference:number;closer_name?:string;notes?:string}|null>(null);
   const styleRef = useRef(false);
 
   useEffect(() => {
@@ -145,6 +199,16 @@ export default function App() {
       styleRef.current = true;
     }
     setOk(true);
+    // Desbloquear audio con el primer toque (el beep de cocina lo necesita)
+    const unlock = () => unlockAudio();
+    document.addEventListener("pointerdown", unlock);
+    // Restaurar carrito y mesa si la página se recargó a mitad de un pedido
+    try {
+      const savedCart = localStorage.getItem("cabane_cart");
+      if (savedCart) setCart(JSON.parse(savedCart));
+      const savedMesa = localStorage.getItem("cabane_mesa");
+      if (savedMesa && MESAS.includes(savedMesa)) setMesa(savedMesa);
+    } catch(_) { /* carrito corrupto — se ignora */ }
     const db = getDB();
     db.auth.getSession().then(({ data: { session: s } }: { data: { session: Session|null } }) => {
       setSession(s);
@@ -156,12 +220,50 @@ export default function App() {
       if (s) loadProfile(s.user.id);
       else { setProfile(null); setAuthLoading(false); }
     });
-    return () => subscription.unsubscribe();
+    return () => { subscription.unsubscribe(); document.removeEventListener("pointerdown", unlock); };
   }, []);
+
+  // Indicador de conexión — en un restaurante el Wi-Fi se cae y nadie se entera
+  useEffect(() => {
+    setOnline(navigator.onLine);
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+  }, []);
+
+  // Mesas y categorías desde Supabase (si fase 5 no se corrió, quedan las fijas)
+  useEffect(() => {
+    if (!profile) return;
+    (async () => {
+      const [{ data: t }, { data: c }] = await Promise.all([
+        getDB().from("tables").select("label").eq("active",true).order("sort").order("label"),
+        getDB().from("categories").select("name").order("sort").order("name"),
+      ]);
+      if (t?.length) setMesasList(t.map((x:{label:string})=>x.label));
+      if (c?.length) setCatList(c.map((x:{name:string})=>x.name));
+    })();
+  }, [profile]);
+
+  // Persistir carrito y mesa — un refresh no debe perder el pedido en curso
+  useEffect(() => {
+    try {
+      if (Object.keys(cart).length) localStorage.setItem("cabane_cart", JSON.stringify(cart));
+      else localStorage.removeItem("cabane_cart");
+    } catch(_) { /* storage lleno — se ignora */ }
+  }, [cart]);
+  useEffect(() => { try { localStorage.setItem("cabane_mesa", mesa); } catch(_) {} }, [mesa]);
 
   async function loadProfile(uid: string) {
     const { data, error } = await getDB().from("profiles").select("*").eq("id", uid).single();
-    if (error || !data) { await getDB().auth.signOut(); setAuthLoading(false); return; }
+    if (error || !data) {
+      // Solo cerrar sesión si el perfil de verdad no existe (acceso revocado).
+      // Un fallo de red no debe expulsar al usuario — reintenta al reconectar.
+      if (error?.code === "PGRST116") await getDB().auth.signOut();
+      setAuthLoading(false);
+      return;
+    }
     const p = data as Profile;
     setProfile(p);
     const saved = localStorage.getItem("cabane_screen");
@@ -211,20 +313,26 @@ export default function App() {
     setUsersLoading(false);
   }
 
+  // Los usuarios se crean en el servidor con la service_role key —
+  // auth.signUp desde el navegador deslogueaba al admin y lo dejaba
+  // logueado como el usuario recién creado.
   async function createUser() {
     if (!newUser.name||!newUser.email||!newUser.password) return;
     setUserMsg("Creando usuario…");
-    const { data, error } = await getDB().auth.signUp({
-      email: newUser.email,
-      password: newUser.password,
-      options: { data: { name: newUser.name } },
-    });
-    if (error) { setUserMsg(`Error: ${error.message}`); return; }
-    if (data.user) {
-      await getDB().from("profiles").upsert({ id: data.user.id, name: newUser.name, role: newUser.role, email: newUser.email });
+    try {
+      const { data: { session: s } } = await getDB().auth.getSession();
+      const res = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${s?.access_token||""}` },
+        body: JSON.stringify(newUser),
+      });
+      const json = await res.json().catch(()=>({error:"Respuesta inválida del servidor"}));
+      if (!res.ok) { setUserMsg(`Error: ${json.error||res.statusText}`); return; }
       setNewUser({name:"",email:"",password:"",role:"waiter"});
       setUserMsg("Usuario creado. Ya puede ingresar con esas credenciales.");
       loadUsers();
+    } catch(_) {
+      setUserMsg("Error: sin conexión con el servidor.");
     }
   }
 
@@ -236,22 +344,63 @@ export default function App() {
 
   function removeUserProfile(id: string) {
     askConfirm("¿Quitar acceso a este usuario?", async () => {
-      await getDB().from("profiles").delete().eq("id", id);
-      setAdminUsers(prev=>prev.filter(u=>u.id!==id));
+      try {
+        const { data: { session: s } } = await getDB().auth.getSession();
+        const res = await fetch("/api/admin/users", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${s?.access_token||""}` },
+          body: JSON.stringify({ id }),
+        });
+        const json = await res.json().catch(()=>({}));
+        if (!res.ok) { setUserMsg(`Error: ${json.error||res.statusText}`); return; }
+        setAdminUsers(prev=>prev.filter(u=>u.id!==id));
+        setUserMsg(json.warning || "Usuario eliminado. Su email queda libre para reutilizar.");
+      } catch(_) {
+        setUserMsg("Error: sin conexión con el servidor.");
+      }
     });
   }
 
+  // Pedidos abiertos para el mapa de mesas del mesero
+  const loadWaiterOrders = useCallback(async () => {
+    const { data } = await getDB().from("orders").select("*, order_items(*)").in("status",["enviado","preparando","listo"]).order("created_at",{ascending:true});
+    setWOrders(data||[]);
+  }, []);
+
   useEffect(() => {
     if (screen==="waiter" && profile) {
-      if (products.length===0) {
-        getDB().from("products").select("*").eq("is_active",true).order("category")
-          .then(({ data }: { data: Product[]|null }) => {
-            const p = data||[]; setProducts(p); if (p.length) setCat(p[0].category);
-          });
-      }
-      if (Object.keys(notesBycat).length===0) loadNotes();
+      // Recargar siempre al entrar: si admin cambió precios o desactivó
+      // productos, el mesero debe ver el menú actualizado sin refrescar la app
+      getDB().from("products").select("*").eq("is_active",true).order("category")
+        .then(({ data }: { data: Product[]|null }) => {
+          const p = data||[];
+          setProducts(p);
+          setCat(prev => prev && p.some(x=>x.category===prev) ? prev : (p[0]?.category||""));
+        });
+      loadNotes();
+      loadWaiterOrders();
     }
-  }, [screen, products.length, profile]);
+  }, [screen, profile, loadWaiterOrders]);
+
+  // Realtime mesero — el mapa de mesas se actualiza solo
+  useEffect(() => {
+    if (screen!=="waiter") return;
+    const ch = getDB().channel("waiter-rt")
+      .on("postgres_changes",{event:"INSERT",schema:"public",table:"orders"},
+        async (p: {new: Order}) => {
+          const { data } = await getDB().from("orders").select("*, order_items(*)").eq("id",p.new.id).single();
+          const full: Order = data || {...p.new, order_items:[]};
+          setWOrders((prev:Order[])=>prev.some((o:Order)=>o.id===full.id)?prev.map((o:Order)=>o.id===full.id?full:o):[...prev, full]);
+        })
+      .on("postgres_changes",{event:"UPDATE",schema:"public",table:"orders"},
+        (p: {new: Order}) => {
+          setWOrders((prev:Order[])=>prev
+            .map((o:Order)=>o.id===p.new.id?{...o,...p.new}:o)
+            .filter((o:Order)=>["enviado","preparando","listo"].includes(o.status)));
+        })
+      .subscribe();
+    return () => { getDB().removeChannel(ch); };
+  }, [screen]);
 
   const loadKitchen = useCallback(async () => {
     setKLoading(true);
@@ -293,9 +442,17 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (screen==="kitchen") loadKitchen();
+    if (screen==="kitchen") {
+      loadKitchen();
+      // Cocina necesita el catálogo para el selector de "dar de baja"
+      if (products.length===0) {
+        getDB().from("products").select("*").eq("is_active",true).order("category")
+          .then(({ data }: { data: Product[]|null }) => setProducts(data||[]));
+      }
+    }
     if (screen==="cashier") loadCashier();
-    if (screen==="admin") { loadAdminStats(); loadAdminProducts(); loadNotes(); loadInventory(); }
+    if (screen==="admin") { loadAdminStats(); loadAdminProducts(); loadNotes(); loadInventory(); loadWaste(); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, loadKitchen, loadCashier]);
 
   // Realtime caja
@@ -303,7 +460,12 @@ export default function App() {
     if (screen!=="cashier") return;
     const ch = getDB().channel("cashier-rt")
       .on("postgres_changes",{event:"INSERT",schema:"public",table:"orders"},
-        (p: {new: Order}) => { setCOrders((prev:Order[])=>[{...p.new,order_items:[]}, ...prev]); })
+        async (p: {new: Order}) => {
+          // El evento realtime llega sin items — hay que traer el pedido completo
+          const { data } = await getDB().from("orders").select("*, order_items(*)").eq("id",p.new.id).single();
+          const full: Order = data || {...p.new, order_items:[]};
+          setCOrders((prev:Order[])=>prev.some((o:Order)=>o.id===full.id)?prev.map((o:Order)=>o.id===full.id?full:o):[full, ...prev]);
+        })
       .on("postgres_changes",{event:"UPDATE",schema:"public",table:"orders"},
         (p: {new: Order}) => { setCOrders((prev:Order[])=>prev.map((o:Order)=>o.id===p.new.id?{...o,...p.new}:o)); })
       .subscribe();
@@ -315,7 +477,13 @@ export default function App() {
     if (screen!=="kitchen") return;
     const ch = getDB().channel("kitchen-rt")
       .on("postgres_changes",{event:"INSERT",schema:"public",table:"orders"},
-        (p: {new: Order}) => { playBeep(); setKOrders((prev:Order[])=>[{...p.new,order_items:[]}, ...prev]); })
+        async (p: {new: Order}) => {
+          playBeep();
+          // El evento realtime llega sin items — la tarjeta salía vacía en cocina
+          const { data } = await getDB().from("orders").select("*, order_items(*)").eq("id",p.new.id).single();
+          const full: Order = data || {...p.new, order_items:[]};
+          setKOrders((prev:Order[])=>prev.some((o:Order)=>o.id===full.id)?prev.map((o:Order)=>o.id===full.id?full:o):[full, ...prev]);
+        })
       .on("postgres_changes",{event:"UPDATE",schema:"public",table:"orders"},
         (p: {new: Order}) => {
           setKOrders((prev:Order[])=>prev
@@ -332,39 +500,52 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  async function loadAdminStats() {
-    setAdminLoading(true);
-    // Rango según modo seleccionado
-    let start: string, end: string;
+  // Rango de fechas según el selector día/mes del admin
+  function adminRange(): { start: string; end: string } {
     if (adminMode==="day") {
       const d = new Date(adminDate+"T00:00:00");
-      start = d.toISOString();
       const de = new Date(adminDate+"T00:00:00"); de.setDate(de.getDate()+1);
-      end = de.toISOString();
-    } else {
-      const [y,m] = adminMonth.split("-").map(Number);
-      start = new Date(y,m-1,1).toISOString();
-      end = new Date(y,m,1).toISOString();
+      return { start: d.toISOString(), end: de.toISOString() };
     }
+    const [y,m] = adminMonth.split("-").map(Number);
+    return { start: new Date(y,m-1,1).toISOString(), end: new Date(y,m,1).toISOString() };
+  }
 
-    const [{ data: periodOrders }, { data: items }] = await Promise.all([
+  async function loadAdminStats() {
+    setAdminLoading(true);
+    const { start, end } = adminRange();
+
+    const [{ data: periodOrders }, { data: items }, { data: exRows }, { data: fxRows }, { data: wRows }] = await Promise.all([
       getDB().from("orders").select("id,total,created_at").eq("status","pagado").gte("created_at",start).lt("created_at",end),
       getDB().from("order_items").select("product_name,quantity,unit_price,orders!inner(status,created_at)")
         .eq("orders.status","pagado").gte("orders.created_at",start).lt("orders.created_at",end),
+      // Si las tablas de fase 3/4 no existen aún, estas queries devuelven null y se ignoran
+      getDB().from("expenses").select("amount").gte("expense_date",start.slice(0,10)).lt("expense_date",end.slice(0,10)),
+      getDB().from("fixed_expenses").select("amount").eq("active",true),
+      getDB().from("waste").select("quantity,unit_price").gte("created_at",start).lt("created_at",end),
     ]);
+
+    const expensesTotal = (exRows||[]).reduce((s:number,e:{amount:number})=>s+e.amount,0);
+    // Los gastos fijos son mensuales — solo entran al reporte por mes
+    const fixedTotal = adminMode==="month" ? (fxRows||[]).reduce((s:number,e:{amount:number})=>s+e.amount,0) : 0;
+    const wasteTotal = (wRows||[]).reduce((s:number,w:{quantity:number;unit_price:number})=>s+w.quantity*w.unit_price,0);
 
     // payments no tiene created_at — filtrar por order_id de los pedidos del período
     const periodIds = (periodOrders||[]).map((o:{id:string})=>o.id);
     const pMap: Record<string,number> = {efectivo:0,tarjeta:0,transferencia:0};
     if (periodIds.length) {
       const { data: payments } = await getDB().from("payments").select("order_id,method,amount").in("order_id",periodIds);
-      const seen = new Set<string>();
+      // Sumar todos los rows — los pagos divididos generan varios rows por pedido
       (payments||[]).forEach((p:{order_id:string;method:string;amount:number}) => {
-        if (seen.has(p.order_id)) return;
-        seen.add(p.order_id);
         if (p.method in pMap) pMap[p.method] += p.amount;
       });
     }
+
+    // Cierre de caja del día seleccionado (solo vista por día)
+    if (adminMode==="day") {
+      const { data: cls } = await getDB().from("cash_closures").select("*").eq("closure_date", adminDate).maybeSingle();
+      setDayClosure(cls||null);
+    } else setDayClosure(null);
 
     const hourlyData = Array(24).fill(0);
     (periodOrders||[]).forEach((o:{total:number;created_at:string}) => {
@@ -391,8 +572,239 @@ export default function App() {
       topProducts,
       payBreakdown:pMap as AdminStats["payBreakdown"],
       hourlyData,
+      expensesTotal,
+      fixedTotal,
+      wasteTotal,
     });
     setAdminLoading(false);
+  }
+
+  async function loadWaste() {
+    const { start, end } = adminRange();
+    const { data } = await getDB().from("waste").select("*").gte("created_at",start).lt("created_at",end).order("created_at",{ascending:false});
+    setWasteList(data||[]);
+  }
+
+  // Registra la baja vía RPC register_waste (transacción: guarda la merma
+  // y descuenta inventario según la receta del producto)
+  async function registerWaste() {
+    const qty = parseFloat(newWaste.quantity);
+    if (!newWaste.product_id || !qty || qty<=0) return;
+    setWasteSaving(true);
+    let err = "";
+    const { data, error } = await getDB().rpc("register_waste", {
+      p_product_id: newWaste.product_id,
+      p_quantity: qty,
+      p_reason: newWaste.reason,
+      p_notes: newWaste.notes.trim()||null,
+    });
+    if (error) {
+      err = (error.code==="PGRST202"||/register_waste/.test(error.message||""))
+        ? "Falta correr fase3-mermas.sql en Supabase"
+        : error.message;
+    } else if (data && data.ok === false) {
+      err = data.error || "No se pudo registrar la baja";
+    }
+    if (err) setWasteMsg(`Error: ${err}`);
+    else {
+      setWasteMsg("Baja registrada — el inventario ya se descontó");
+      setNewWaste({product_id:"",quantity:"1",reason:WASTE_REASONS[0],notes:""});
+      setWasteModal(false);
+      if (adminSection==="waste") loadWaste();
+    }
+    setWasteSaving(false);
+    setTimeout(()=>setWasteMsg(""), 6000);
+  }
+
+  function deleteWaste(id: string) {
+    askConfirm("¿Eliminar este registro de baja? (No devuelve el stock descontado)", async () => {
+      await getDB().from("waste").delete().eq("id",id);
+      loadWaste();
+    });
+  }
+
+  // ── Fase 4: gastos ──────────────────────────────────────────────
+  async function loadExpenses() {
+    const { start, end } = adminRange();
+    const [{ data: ex }, { data: fx }] = await Promise.all([
+      getDB().from("expenses").select("*").gte("expense_date",start.slice(0,10)).lt("expense_date",end.slice(0,10)).order("expense_date",{ascending:false}).order("created_at",{ascending:false}),
+      getDB().from("fixed_expenses").select("*").order("name"),
+    ]);
+    setExpenses(ex||[]);
+    setFixedExpenses(fx||[]);
+  }
+
+  async function addExpense() {
+    const amount = parseFloat(newExpense.amount);
+    if (!newExpense.description.trim() || !amount || amount<=0) return;
+    const { error } = await getDB().from("expenses").insert({
+      category: newExpense.category,
+      description: newExpense.description.trim(),
+      amount,
+      expense_date: newExpense.expense_date,
+      created_by: profile?.id,
+      creator_name: profile?.name,
+    });
+    if (error) {
+      setExpenseMsg(/expenses/.test(error.message||"")&&/exist|relation/.test(error.message||"") ? "Error: falta correr fase4-gastos.sql en Supabase" : `Error: ${error.message}`);
+    } else {
+      setExpenseMsg("Gasto registrado");
+      setNewExpense(e=>({...e,description:"",amount:""}));
+      loadExpenses();
+    }
+    setTimeout(()=>setExpenseMsg(""), 5000);
+  }
+
+  function deleteExpense(id: string) {
+    askConfirm("¿Eliminar este gasto?", async () => {
+      await getDB().from("expenses").delete().eq("id",id);
+      loadExpenses();
+    });
+  }
+
+  async function addFixed() {
+    const amount = parseFloat(newFixed.amount);
+    if (!newFixed.name.trim() || !amount || amount<=0) return;
+    const { error } = await getDB().from("fixed_expenses").insert({ name:newFixed.name.trim(), category:newFixed.category, amount, active:true });
+    if (error) setExpenseMsg(`Error: ${error.message}`);
+    else { setNewFixed({name:"",category:"Alquiler",amount:""}); loadExpenses(); }
+    setTimeout(()=>setExpenseMsg(""), 5000);
+  }
+
+  async function toggleFixed(id: string, active: boolean) {
+    setFixedExpenses(prev=>prev.map(f=>f.id===id?{...f,active:!active}:f));
+    await getDB().from("fixed_expenses").update({active:!active}).eq("id",id);
+  }
+
+  function deleteFixed(id: string) {
+    askConfirm("¿Eliminar este gasto fijo?", async () => {
+      await getDB().from("fixed_expenses").delete().eq("id",id);
+      loadExpenses();
+    });
+  }
+
+  // ── Fase 5: mesas y categorías gestionables ─────────────────────
+  async function loadConfig() {
+    const [{ data: t, error: tErr }, { data: c }] = await Promise.all([
+      getDB().from("tables").select("*").order("sort").order("label"),
+      getDB().from("categories").select("*").order("sort").order("name"),
+    ]);
+    if (tErr && /relation|exist/.test(tErr.message||"")) {
+      setCfgMsg("Error: falta correr fase5-config.sql en Supabase");
+      setTimeout(()=>setCfgMsg(""), 6000);
+      return;
+    }
+    setCfgTables(t||[]);
+    setCfgCats(c||[]);
+    if (t?.length) setMesasList(t.filter((x:{active:boolean})=>x.active).map((x:{label:string})=>x.label));
+    if (c?.length) setCatList(c.map((x:{name:string})=>x.name));
+  }
+
+  async function addMesaCfg() {
+    const label = newMesaLabel.trim();
+    if (!label) return;
+    const maxSort = cfgTables.reduce((m,t)=>Math.max(m,t.sort), -1);
+    const { error } = await getDB().from("tables").insert({label, sort:maxSort+1, active:true});
+    if (error) { setCfgMsg(`Error: ${error.message}`); setTimeout(()=>setCfgMsg(""),6000); return; }
+    setNewMesaLabel("");
+    loadConfig();
+  }
+
+  async function toggleMesaCfg(id: string, active: boolean) {
+    await getDB().from("tables").update({active:!active}).eq("id",id);
+    loadConfig();
+  }
+
+  function deleteMesaCfg(id: string, label: string) {
+    askConfirm(`¿Eliminar "${label}"? Los pedidos viejos conservan el nombre.`, async () => {
+      await getDB().from("tables").delete().eq("id",id);
+      loadConfig();
+    });
+  }
+
+  async function addCatCfg() {
+    const name = newCatName.trim();
+    if (!name) return;
+    const maxSort = cfgCats.reduce((m,c)=>Math.max(m,c.sort), -1);
+    const { error } = await getDB().from("categories").insert({name, sort:maxSort+1});
+    if (error) { setCfgMsg(`Error: ${error.message}`); setTimeout(()=>setCfgMsg(""),6000); return; }
+    setNewCatName("");
+    loadConfig();
+  }
+
+  function deleteCatCfg(id: string, name: string) {
+    const inUse = adminProducts.filter(p=>p.category===name).length;
+    askConfirm(inUse
+      ? `"${name}" tiene ${inUse} producto${inUse>1?"s":""}. Se ocultarán del menú hasta reasignarlos. ¿Eliminar igual?`
+      : `¿Eliminar la categoría "${name}"?`, async () => {
+      await getDB().from("categories").delete().eq("id",id);
+      loadConfig();
+    });
+  }
+
+  // Sube/baja un elemento intercambiando su orden con el vecino
+  async function swapSort(tbl: "tables"|"categories", list: {id:string;sort:number}[], idx: number, dir: -1|1) {
+    const a = list[idx], b = list[idx+dir];
+    if (!a || !b) return;
+    let sortA = b.sort, sortB = a.sort;
+    if (sortA === sortB) sortA = sortB + dir; // desempate si comparten sort
+    await Promise.all([
+      getDB().from(tbl).update({sort:sortA}).eq("id",a.id),
+      getDB().from(tbl).update({sort:sortB}).eq("id",b.id),
+    ]);
+    loadConfig();
+  }
+
+  // ── Fase 5: cierre de caja (arqueo) ─────────────────────────────
+  async function openClosure() {
+    setClosureModal(true);
+    const { data } = await getDB().from("cash_closures").select("*").eq("closure_date", localDateStr()).maybeSingle();
+    if (data) {
+      setClosureSaved(data);
+      setClosureCash(String(data.counted_cash));
+      setClosureNotes(data.notes||"");
+    } else {
+      setClosureSaved(null); setClosureCash(""); setClosureNotes("");
+    }
+  }
+
+  async function saveClosure() {
+    const counted = parseFloat(closureCash);
+    if (isNaN(counted) || counted<0) return;
+    const expected = cPayBreakdown.efectivo;
+    const { error } = await getDB().from("cash_closures").upsert({
+      closure_date: localDateStr(),
+      expected_cash: expected,
+      counted_cash: counted,
+      difference: Math.round((counted-expected)*100)/100,
+      expected_card: cPayBreakdown.tarjeta,
+      expected_transfer: cPayBreakdown.transferencia,
+      total_orders: cOrders.filter(o=>o.status==="pagado").length,
+      notes: closureNotes.trim()||null,
+      closed_by: profile?.id,
+      closer_name: profile?.name,
+    }, { onConflict: "closure_date" });
+    if (error) {
+      setClosureMsg(/relation|exist/.test(error.message||"") ? "Error: falta correr fase5-config.sql en Supabase" : `Error: ${error.message}`);
+    } else {
+      setClosureModal(false);
+      setClosureMsg(`Cierre guardado — diferencia ${$(Math.round((counted-expected)*100)/100)}`);
+    }
+    setTimeout(()=>setClosureMsg(""), 6000);
+  }
+
+  // ── Fase 4: historial de pedidos con hora de cobro ──────────────
+  async function loadHistory() {
+    const { start, end } = adminRange();
+    const { data: orders } = await getDB().from("orders").select("*, order_items(*)").in("status",["pagado","cancelado"]).gte("created_at",start).lt("created_at",end).order("created_at",{ascending:false});
+    setHistOrders(orders||[]);
+    const ids = (orders||[]).filter((o:Order)=>o.status==="pagado").map((o:Order)=>o.id);
+    const map: Record<string,Payment[]> = {};
+    if (ids.length) {
+      const { data: pays } = await getDB().from("payments").select("order_id,method,amount,created_at").in("order_id",ids);
+      (pays||[]).forEach((p:Payment) => { (map[p.order_id] = map[p.order_id]||[]).push(p); });
+    }
+    setHistPayments(map);
   }
 
   async function loadAdminProducts() {
@@ -403,7 +815,7 @@ export default function App() {
   async function addProduct() {
     if (!newProd.name||!newProd.price) return;
     await getDB().from("products").insert({name:newProd.name,category:newProd.category,price:parseFloat(newProd.price),is_active:true,description:newProd.description||null});
-    setNewProd({name:"",category:CAT_ORDER[0],price:"",description:""});
+    setNewProd({name:"",category:catList[0]||CAT_ORDER[0],price:"",description:""});
     loadAdminProducts();
   }
 
@@ -454,7 +866,11 @@ export default function App() {
     const total = items.reduce((s,i)=>s+i.price*i.qty,0);
     setSending(true);
     try {
-      const { data: order, error }: { data: Order|null; error: unknown } = await getDB().from("orders").insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null}).select().single();
+      let { data: order, error }: { data: Order|null; error: {message?:string}|null } = await getDB().from("orders").insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null,customer_name:customerName.trim()||null}).select().single();
+      // Si la columna customer_name aún no existe (fase2-mesas.sql sin correr), reintenta sin ella
+      if (error && /customer_name/.test(error.message||"")) {
+        ({ data: order, error } = await getDB().from("orders").insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null}).select().single());
+      }
       if (error||!order) { setSentMsg("Error al enviar. Revisa tu conexión e intenta de nuevo."); setSending(false); return; }
       const { error: itemsError } = await getDB().from("order_items").insert(items.map((i:CartItem)=>({
         order_id:order.id, product_id:i.id, product_name:i.name,
@@ -462,9 +878,11 @@ export default function App() {
         notes:[...i.notes, i.customNote].filter(Boolean).join(", ")||null
       })));
       if (itemsError) { setSentMsg("Pedido creado pero hubo un error con los items. Avisa al admin."); setSending(false); return; }
-      setCart({}); setModal(false); setTableNote("");
+      setCart({}); setModal(false); setTableNote(""); setCustomerName("");
       setSentMsg(`Pedido #${order.order_number} confirmado — cocina ya lo recibió`);
       setTimeout(()=>setSentMsg(""),5000);
+      setWaiterView("map");
+      loadWaiterOrders();
     } catch(_) {
       setSentMsg("Sin conexión. Verifica internet e intenta de nuevo.");
     }
@@ -557,33 +975,79 @@ export default function App() {
     }
   }
 
-  async function cobrar(id: string, method: string, amount: number) {
-    setPaying(id);
-    setCOrders((prev:Order[])=>prev.map(o=>o.id===id?{...o,status:"pagado"}:o));
-    setCPayBreakdown((prev:{efectivo:number;tarjeta:number;transferencia:number})=>({...prev,[method]:(prev[method as keyof typeof prev]||0)+amount}));
-    // Fetch fresh order with items — Realtime orders arrive with order_items:[] empty
-    const { data: freshOrder } = await getDB().from("orders").select("*, order_items(*)").eq("id",id).single();
-    await getDB().from("payments").insert({order_id:id,method,amount});
-    await getDB().from("orders").update({status:"pagado"}).eq("id",id);
-    if (freshOrder) deductInventory(freshOrder);
+  // Cobro atómico vía RPC pay_order (transacción en Postgres: valida estado,
+  // registra pagos, marca pagado y descuenta inventario — rechaza doble cobro).
+  // Si el SQL de fase 1 aún no se corrió, usa el flujo directo con guardia.
+  async function payOrder(orderId: string, parts: {method:string; amount:number}[]) {
+    setPaying(orderId);
+    let err = "";
+    const { data, error } = await getDB().rpc("pay_order", { p_order_id: orderId, p_parts: parts });
+    if (error) {
+      const missingFn = error.code === "PGRST202" || /pay_order/.test(error.message||"");
+      if (missingFn) {
+        // Fallback: marcar pagado SOLO si nadie lo pagó antes (guardia anti doble cobro)
+        const { data: updated } = await getDB().from("orders").update({status:"pagado"}).eq("id",orderId).neq("status","pagado").select();
+        if (!updated?.length) err = "Este pedido ya fue cobrado en otra caja.";
+        else {
+          await Promise.all(parts.map(p=>getDB().from("payments").insert({order_id:orderId,method:p.method,amount:p.amount})));
+          const { data: freshOrder } = await getDB().from("orders").select("*, order_items(*)").eq("id",orderId).single();
+          if (freshOrder) await deductInventory(freshOrder);
+        }
+      } else err = error.message;
+    } else if (data && data.ok === false) {
+      err = data.error || "No se pudo registrar el cobro";
+    }
+    if (err) {
+      setPayError(err);
+      setTimeout(()=>setPayError(""), 6000);
+      loadCashier();
+    } else {
+      setCOrders((prev:Order[])=>prev.map(o=>o.id===orderId?{...o,status:"pagado"}:o));
+      setCPayBreakdown((prev:{efectivo:number;tarjeta:number;transferencia:number})=>{
+        const next = {...prev};
+        parts.forEach(p=>{ next[p.method as keyof typeof next] = (next[p.method as keyof typeof next]||0) + p.amount; });
+        return next;
+      });
+    }
     setPaying(null);
   }
 
-  async function cobrarSplit(order: Order, parts: {method:string; amount:number}[]) {
-    setPaying(order.id);
+  const cobrar = (id: string, method: string, amount: number) => payOrder(id, [{method, amount}]);
+
+  function cobrarSplit(order: Order, parts: {method:string; amount:number}[]) {
     setSplitModal(null);
-    setCOrders((prev:Order[])=>prev.map(o=>o.id===order.id?{...o,status:"pagado"}:o));
-    setCPayBreakdown((prev:{efectivo:number;tarjeta:number;transferencia:number})=>{
-      const next = {...prev};
-      parts.forEach(p=>{ next[p.method as keyof typeof next] = (next[p.method as keyof typeof next]||0) + p.amount; });
-      return next;
-    });
-    // Fetch fresh order with items before deducting stock
-    const { data: freshOrder } = await getDB().from("orders").select("*, order_items(*)").eq("id",order.id).single();
-    await Promise.all(parts.map(p=>getDB().from("payments").insert({order_id:order.id,method:p.method,amount:p.amount})));
-    await getDB().from("orders").update({status:"pagado"}).eq("id",order.id);
-    if (freshOrder) deductInventory(freshOrder);
-    setPaying(null);
+    payOrder(order.id, parts);
+  }
+
+  // Cobra todos los pedidos abiertos de una mesa, uno por uno
+  async function payWholeMesa(orders: Order[], method: string) {
+    setMesaPayModal(null);
+    for (const o of orders) {
+      await payOrder(o.id, [{method, amount:o.total}]);
+    }
+    setCashierMesa(null);
+  }
+
+  // Mueve un pedido a otra mesa (RPC move_order; fallback directo si el SQL de fase 2 no se corrió)
+  async function doMoveOrder(order: Order, target: string) {
+    setMoveOrder(null);
+    let err = "";
+    const { data, error } = await getDB().rpc("move_order", { p_order_id: order.id, p_table: target });
+    if (error) {
+      if (error.code === "PGRST202" || /move_order/.test(error.message||"")) {
+        const { error: e2 } = await getDB().from("orders").update({table_label:target}).eq("id",order.id);
+        if (e2) err = e2.message;
+      } else err = error.message;
+    } else if (data && data.ok === false) {
+      err = data.error || "No se pudo mover el pedido";
+    }
+    if (err) {
+      setPayError(`No se pudo mover el pedido: ${err}`);
+      setTimeout(()=>setPayError(""), 6000);
+    } else {
+      const upd = (list:Order[]) => list.map(o=>o.id===order.id?{...o,table_label:target}:o);
+      setCOrders(upd); setWOrders(upd); setKOrders(upd);
+    }
   }
 
   if (!ok) return null;
@@ -592,7 +1056,7 @@ export default function App() {
   const cartTotal = cartItems.reduce((s,i)=>s+i.price*i.qty,0);
   const cartCount = cartItems.reduce((s,i)=>s+i.qty,0);
   const cats = [...new Set(products.map(p=>p.category))].sort((a,b)=>{
-    const ai = CAT_ORDER.indexOf(a); const bi = CAT_ORDER.indexOf(b);
+    const ai = catList.indexOf(a); const bi = catList.indexOf(b);
     return (ai===-1?99:ai) - (bi===-1?99:bi);
   });
   const visProd = products.filter(p=>{
@@ -619,6 +1083,53 @@ export default function App() {
     return { background:m[s][0], color:m[s][1], padding:"4px 12px", borderRadius:99, fontSize:12, fontWeight:800, letterSpacing:"0.03em", display:"inline-block" as const };
   };
 
+  // ── Mapa de mesas (compartido entre mesero y caja) ──────────────
+  const mesaOrdersOf = (orders: Order[], m: string) =>
+    orders.filter(o=>o.table_label===m && !["pagado","cancelado"].includes(o.status));
+
+  // Categorías dinámicas + las huérfanas que aún tengan productos
+  const catsFor = (prods: Product[]) =>
+    [...catList, ...[...new Set(prods.map(p=>p.category))].filter(c=>!catList.includes(c))];
+
+  const renderMesaMap = (orders: Order[], onPick:(m:string)=>void, selected?: string|null) => (
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:10}}>
+      {mesasList.map(m=>{
+        const mo = mesaOrdersOf(orders, m);
+        const libre = mo.length===0;
+        const allListo = !libre && mo.every(o=>o.status==="listo");
+        const total = mo.reduce((s,o)=>s+o.total,0);
+        const isSel = selected===m;
+        return (
+          <button key={m} onClick={()=>onPick(m)} style={{
+            textAlign:"left" as const, fontFamily:FONT, cursor:"pointer", minHeight:92,
+            background: libre ? CARD : allListo ? "rgba(47,125,50,0.10)" : "rgba(181,137,74,0.16)",
+            border:`2px solid ${isSel ? RED : libre ? BORDER : allListo ? GREEN : GOLD}`,
+            borderRadius:14, padding:"12px 14px",
+            boxShadow: isSel ? "0 4px 14px rgba(122,30,58,0.25)" : "none",
+          }}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,marginBottom:6}}>
+              <span style={{fontSize:15,fontWeight:900,color:DARK}}>{m}</span>
+              <span style={{fontSize:10,fontWeight:800,textTransform:"uppercase" as const,letterSpacing:"0.04em",
+                color: libre ? MUTED : allListo ? GREEN : "#8A6210"}}>
+                {libre ? "Libre" : allListo ? "Por cobrar" : "En cocina"}
+              </span>
+            </div>
+            {libre ? (
+              <span style={{fontSize:12,fontWeight:600,color:MUTED}}>Sin pedidos</span>
+            ) : (
+              <>
+                <p style={{fontSize:18,fontWeight:900,color:DARK,lineHeight:1,marginBottom:4}}>{$(total)}</p>
+                <p style={{fontSize:11,fontWeight:700,color:MUTED,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" as const}}>
+                  {mo.map(o=>o.customer_name||`#${o.order_number}`).join(" · ")}
+                </p>
+              </>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+
   // ── LOADING ─────────────────────────────────────────────────────
   if (authLoading) return (
     <div style={{minHeight:"100vh",background:DARK,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16,fontFamily:FONT}}>
@@ -627,9 +1138,16 @@ export default function App() {
     </div>
   );
 
+  const offlineBanner = !online ? (
+    <div style={{position:"fixed" as const,top:0,left:0,right:0,zIndex:500,background:ALERT_RED,color:"#fff",textAlign:"center" as const,padding:"8px 16px",fontSize:13,fontWeight:800}}>
+      ⚠️ Sin conexión a internet — los cambios no se guardarán hasta reconectar
+    </div>
+  ) : null;
+
   // ── LOGIN ───────────────────────────────────────────────────────
   if (!session||!profile) return (
     <div style={{minHeight:"100vh",background:`linear-gradient(160deg, #1A0D12 0%, #2A1A1F 50%, #1A0D12 100%)`,display:"flex",alignItems:"center",justifyContent:"center",padding:"24px 16px",fontFamily:FONT,position:"relative",overflow:"hidden"}}>
+      {offlineBanner}
       {/* Decorative glows */}
       <div style={{position:"absolute",top:"10%",left:"50%",transform:"translateX(-50%)",width:"70%",height:"50%",background:`radial-gradient(ellipse, rgba(122,30,58,0.25) 0%, transparent 70%)`,pointerEvents:"none"}}/>
       <div style={{position:"absolute",bottom:"-10%",right:"-10%",width:"50%",height:"50%",background:`radial-gradient(ellipse, rgba(181,137,74,0.1) 0%, transparent 70%)`,pointerEvents:"none"}}/>
@@ -649,7 +1167,7 @@ export default function App() {
             marginBottom:24,
           }}>
             <img
-              src="/640524393_18019556534658854_3130895744895686814_n.jpg"
+              src="/logo.jpg"
               alt="Cabane Sandwiches"
               onError={(e)=>{ (e.currentTarget as HTMLImageElement).style.display="none"; }}
               style={{width:180,height:180,objectFit:"contain" as const,borderRadius:22,display:"block"}}
@@ -701,11 +1219,12 @@ export default function App() {
   // ── APP SHELL ───────────────────────────────────────────────────
   return (
     <div style={{minHeight:"100vh",background:CREAM,display:"flex",flexDirection:"column",fontFamily:FONT}}>
-      
+      {offlineBanner}
+
       {/* Top bar */}
       <header style={{background:DARK,padding:"0 16px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100,boxShadow:`0 2px 12px rgba(23,18,15,0.3)`}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <img src="/640524393_18019556534658854_3130895744895686814_n.jpg" alt="Cabane" onError={(e)=>{(e.currentTarget as HTMLImageElement).style.display="none"}}
+          <img src="/logo.jpg" alt="Cabane" onError={(e)=>{(e.currentTarget as HTMLImageElement).style.display="none"}}
             style={{width:34,height:34,borderRadius:8,objectFit:"contain" as const,background:DARK}}/>
           <span style={{fontWeight:900,fontSize:16,color:"#fff",letterSpacing:"-0.01em"}}><span style={{color:"#E8D5B7"}}>CABANE</span> <span style={{color:"rgba(255,255,255,0.5)",fontWeight:600,fontSize:13}}>Sandwiches</span></span>
         </div>
@@ -732,8 +1251,39 @@ export default function App() {
         </nav>
       )}
 
-      {/* ── MESERO ─────────────────────────────────────────────── */}
-      {screen==="waiter" && (
+      {/* ── MESERO · MAPA DE MESAS ─────────────────────────────── */}
+      {screen==="waiter" && waiterView==="map" && (
+        <div style={{flex:1,padding:16,maxWidth:1100,margin:"0 auto",width:"100%"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap" as const,gap:10}}>
+            <div>
+              <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:2}}>Módulo</p>
+              <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK}}>Mesas</h1>
+            </div>
+            <button onClick={loadWaiterOrders} style={{...btn(CREAM2,DARK),height:44,padding:"0 18px",fontSize:14}}>↻ Actualizar</button>
+          </div>
+
+          {sentMsg && (
+            <div style={{marginBottom:14,background:"rgba(47,125,50,0.1)",border:`1.5px solid ${GREEN}`,borderRadius:12,padding:"12px 16px",fontSize:14,fontWeight:700,color:GREEN}}>
+              {sentMsg}
+            </div>
+          )}
+
+          <p style={{fontSize:13,fontWeight:600,color:MUTED,marginBottom:12}}>Toca una mesa para tomar el pedido. Una mesa puede tener varios pedidos, cada uno con su nombre.</p>
+
+          {renderMesaMap(wOrders, (m)=>{ setMesa(m); setWaiterView("order"); })}
+
+          {cartCount>0 && (
+            <div style={{position:"sticky" as const,bottom:16,marginTop:16}}>
+              <button onClick={()=>setWaiterView("order")} style={{...btn(RED,"#fff"),width:"100%",height:56,fontSize:15,boxShadow:"0 8px 24px rgba(122,30,58,0.4)"}}>
+                Continuar pedido de {mesa} · {$(cartTotal)}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── MESERO · TOMAR PEDIDO ──────────────────────────────── */}
+      {screen==="waiter" && waiterView==="order" && (
         <div style={{flex:1,display:"flex",flexDirection:"column"}}>
           <style>{`
             .waiter-sidebar{display:none}
@@ -756,7 +1306,7 @@ export default function App() {
               <div>
                 <p style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,0.35)",textTransform:"uppercase" as const,letterSpacing:"0.12em",marginBottom:10}}>Seleccionar mesa</p>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
-                  {MESAS.map(m=>(
+                  {mesasList.map(m=>(
                     <button key={m} onClick={()=>setMesa(m)} style={{padding:"11px 8px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,cursor:"pointer",
                       border:mesa===m?`2px solid ${RED}`:"2px solid rgba(255,255,255,0.1)",
                       background:mesa===m?"rgba(225,59,45,0.2)":"rgba(255,255,255,0.05)",
@@ -809,6 +1359,22 @@ export default function App() {
             <main style={{paddingBottom:100}}>
               {/* Sticky header: búsqueda + categorías */}
               <div style={{position:"sticky" as const,top:0,zIndex:10,background:CREAM,borderBottom:`1px solid ${BORDER}`,padding:"10px 16px"}}>
+                {/* Volver al mapa + mesa actual */}
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap" as const}}>
+                  <button onClick={()=>setWaiterView("map")} style={{padding:"8px 14px",borderRadius:10,fontSize:13,fontWeight:800,fontFamily:FONT,
+                    background:DARK,color:"#fff",border:"none",cursor:"pointer"}}>
+                    ← Mesas
+                  </button>
+                  <span style={{fontSize:16,fontWeight:900,color:DARK}}>{mesa}</span>
+                  {(()=>{
+                    const existing = mesaOrdersOf(wOrders, mesa);
+                    return existing.length>0 ? (
+                      <span style={{fontSize:12,fontWeight:700,color:"#8A6210",background:"rgba(181,137,74,0.18)",borderRadius:99,padding:"4px 10px"}}>
+                        Ya tiene {existing.length} pedido{existing.length>1?"s":""}: {existing.map(o=>o.customer_name||`#${o.order_number}`).join(", ")}
+                      </span>
+                    ) : null;
+                  })()}
+                </div>
                 {/* Búsqueda */}
                 <input
                   type="search"
@@ -820,7 +1386,7 @@ export default function App() {
                 />
                 {/* Mesa selector — solo en móvil */}
                 <div className="mesa-chips-row" style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,scrollbarWidth:"none" as const}}>
-                  {MESAS.map(m=>(
+                  {mesasList.map(m=>(
                     <button key={m} onClick={()=>setMesa(m)} style={{
                       padding:"8px 14px",borderRadius:99,fontSize:13,fontWeight:700,whiteSpace:"nowrap" as const,
                       border:"none",cursor:"pointer",fontFamily:FONT,flexShrink:0,
@@ -947,7 +1513,7 @@ export default function App() {
           </div>
 
           {/* Mobile cart bar */}
-          <div className="mobile-cart-bar" style={{position:"fixed" as const,bottom:0,left:0,right:0,background:DARK,padding:"12px 16px 24px",display:"flex",alignItems:"center",gap:12,zIndex:50,boxShadow:"0 -8px 32px rgba(23,18,15,0.35)"}}>
+          <div className="mobile-cart-bar" style={{position:"fixed" as const,bottom:0,left:0,right:0,background:DARK,padding:"12px 16px calc(16px + env(safe-area-inset-bottom))",display:"flex",alignItems:"center",gap:12,zIndex:50,boxShadow:"0 -8px 32px rgba(23,18,15,0.35)"}}>
             <div style={{flex:1}}>
               <p style={{fontSize:12,color:"rgba(255,255,255,0.4)",fontWeight:600,marginBottom:2}}>{cartCount===0?"Sin productos":cartCount===1?"1 producto":`${cartCount} productos`} · {mesa}</p>
               <p style={{fontSize:26,fontWeight:900,color: cartCount>0?"#fff":"rgba(255,255,255,0.3)",lineHeight:1}}>{$(cartTotal)}</p>
@@ -972,10 +1538,25 @@ export default function App() {
               <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:2}}>Módulo</p>
               <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK}}>Cocina</h1>
             </div>
-            <button onClick={loadKitchen} style={{...btn(CREAM2,DARK),height:44,padding:"0 18px",fontSize:14}}>
-              {kLoading?"Cargando…":"↻ Actualizar"}
-            </button>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
+              <button onClick={()=>{setNewWaste({product_id:"",quantity:"1",reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
+                style={{...btn("rgba(198,40,40,0.1)",ALERT_RED),height:44,padding:"0 16px",fontSize:14,border:`1.5px solid ${ALERT_RED}44`}}>
+                🗑 Dar de baja
+              </button>
+              <button onClick={loadKitchen} style={{...btn(CREAM2,DARK),height:44,padding:"0 18px",fontSize:14}}>
+                {kLoading?"Cargando…":"↻ Actualizar"}
+              </button>
+            </div>
           </div>
+
+          {wasteMsg && (
+            <div style={{marginBottom:14,borderRadius:12,padding:"12px 16px",fontSize:14,fontWeight:700,
+              background:wasteMsg.startsWith("Error")?"#FFEBEE":"rgba(47,125,50,0.1)",
+              border:`1.5px solid ${wasteMsg.startsWith("Error")?ALERT_RED:GREEN}`,
+              color:wasteMsg.startsWith("Error")?ALERT_RED:GREEN}}>
+              {wasteMsg}
+            </div>
+          )}
 
           {/* Status counters */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:20}}>
@@ -989,6 +1570,21 @@ export default function App() {
                 <p style={{fontSize:11,fontWeight:700,color:fg,opacity:.8,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginTop:4}}>{label}</p>
               </div>
             ))}
+          </div>
+
+          {/* Leyenda de tiempos */}
+          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap" as const,marginBottom:16,padding:"10px 14px",background:CARD,border:`1px solid ${BORDER}`,borderRadius:12}}>
+            <span style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em"}}>Tiempo en cocina:</span>
+            {[
+              {c:GREEN,l:"0–10 min"},
+              {c:ORANGE,l:"10–15 min"},
+              {c:ALERT_RED,l:"+15 min"},
+            ].map(({c,l})=>(
+              <span key={l} style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:DARK}}>
+                <span style={{width:12,height:12,borderRadius:"50%",background:c,display:"inline-block"}}/>{l}
+              </span>
+            ))}
+            <span style={{fontSize:12,fontWeight:600,color:MUTED}}>(parpadea a los 20 min)</span>
           </div>
 
           {/* Resumen del día */}
@@ -1025,11 +1621,12 @@ export default function App() {
                 void tick;
                 return (
                   <div key={o.id} style={{...card,padding:16,
-                    border:o.status==="enviado"?`2px solid ${RED}`:o.status==="listo"?`2px solid ${GREEN}`:`1px solid ${BORDER}`}}>
+                    border:o.status==="enviado"?`2px solid ${RED}`:o.status==="listo"?`2px solid ${GREEN}`:`1px solid ${BORDER}`,
+                    borderLeft:`6px solid ${kitchenTimeColor(mins)}`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
                       <div>
-                        <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:2}}>#{o.order_number} · {time} · <span style={{color:mins>=15?RED:mins>=8?GOLD:GREEN,fontWeight:800}}>{elapsed(o.created_at)}</span></p>
-                        <p style={{fontSize:22,fontWeight:900,color:DARK}}>{o.table_label}</p>
+                        <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:2}}>#{o.order_number} · {time} · <span style={{background:kitchenTimeColor(mins),color:"#fff",borderRadius:99,padding:"2px 10px",fontWeight:800,fontSize:11,display:"inline-block",animation:mins>=20?"pulse 1s ease infinite":undefined}}>{elapsed(o.created_at)}</span></p>
+                        <p style={{fontSize:22,fontWeight:900,color:DARK}}>{o.table_label}{o.customer_name?<span style={{fontSize:15,fontWeight:800,color:MUTED}}> · {o.customer_name}</span>:null}</p>
                         {o.table_note && <p style={{fontSize:12,fontWeight:700,color:DARK,background:GOLD,borderRadius:6,padding:"3px 8px",marginTop:4,display:"inline-block"}}>Nota mesa: {o.table_note}</p>}
                       </div>
                       <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Prep.":"Listo"}</span>
@@ -1076,10 +1673,30 @@ export default function App() {
               <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:2}}>Módulo</p>
               <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK}}>Caja</h1>
             </div>
-            <button onClick={loadCashier} style={{...btn(CREAM2,DARK),height:44,padding:"0 18px",fontSize:14}}>
-              {cLoading?"Cargando…":"↻ Actualizar"}
-            </button>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
+              <button onClick={openClosure} style={{...btn(DARK,"#fff"),height:44,padding:"0 16px",fontSize:14}}>
+                🧾 Cierre de caja
+              </button>
+              <button onClick={loadCashier} style={{...btn(CREAM2,DARK),height:44,padding:"0 18px",fontSize:14}}>
+                {cLoading?"Cargando…":"↻ Actualizar"}
+              </button>
+            </div>
           </div>
+
+          {closureMsg && (
+            <div style={{marginBottom:14,borderRadius:12,padding:"12px 16px",fontSize:14,fontWeight:700,
+              background:closureMsg.startsWith("Error")?"#FFEBEE":"rgba(47,125,50,0.1)",
+              border:`1.5px solid ${closureMsg.startsWith("Error")?ALERT_RED:GREEN}`,
+              color:closureMsg.startsWith("Error")?ALERT_RED:GREEN}}>
+              {closureMsg}
+            </div>
+          )}
+
+          {payError && (
+            <div style={{background:"#FFEBEE",border:`2px solid ${ALERT_RED}`,borderRadius:12,padding:"12px 16px",marginBottom:14,fontSize:14,fontWeight:800,color:ALERT_RED}}>
+              ⚠️ {payError}
+            </div>
+          )}
 
           {/* Métricas — visibles en móvil arriba, en desktop se mueven al sidebar */}
           <div className="cashier-sidebar" style={{display:"none"}}/>
@@ -1108,6 +1725,41 @@ export default function App() {
                 );
               })()}
 
+              {/* Mapa de mesas — toca una para ver y cobrar sus pedidos */}
+              <div style={{marginBottom:16}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:10,flexWrap:"wrap" as const}}>
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em"}}>Mesas</p>
+                  {cashierMesa && (
+                    <button onClick={()=>setCashierMesa(null)} style={{padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,
+                      background:CREAM2,color:DARK,border:"none",cursor:"pointer"}}>
+                      Ver todas ✕
+                    </button>
+                  )}
+                </div>
+                {renderMesaMap(cOrders, (m)=>setCashierMesa(prev=>prev===m?null:m), cashierMesa)}
+              </div>
+
+              {/* Cobrar mesa completa */}
+              {(()=>{
+                if (!cashierMesa) return null;
+                const mo = mesaOrdersOf(cOrders, cashierMesa);
+                if (mo.length===0) return null;
+                const allListo = mo.every(o=>o.status==="listo");
+                const total = mo.reduce((s,o)=>s+o.total,0);
+                return (
+                  <div style={{...card,padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" as const}}>
+                    <div style={{flex:1,minWidth:160}}>
+                      <p style={{fontSize:15,fontWeight:900,color:DARK}}>{cashierMesa} · {mo.length} pedido{mo.length>1?"s":""}</p>
+                      <p style={{fontSize:13,fontWeight:700,color:MUTED}}>Total pendiente: <span style={{color:RED,fontWeight:900}}>{$(total)}</span></p>
+                    </div>
+                    <button disabled={!allListo} onClick={()=>setMesaPayModal({mesa:cashierMesa,orders:mo})}
+                      style={{...btn(GREEN,"#fff",!allListo),height:48,padding:"0 18px",fontSize:14}}>
+                      {allListo ? `Cobrar mesa completa · ${$(total)}` : "Esperando que todo esté listo"}
+                    </button>
+                  </div>
+                );
+              })()}
+
               {(()=>{
                 const overdue=cOrders.filter(o=>o.status==="listo"&&(Date.now()-new Date(o.created_at).getTime())>20*60*1000);
                 return overdue.length>0?(
@@ -1125,13 +1777,13 @@ export default function App() {
                 ):null;
               })()}
 
-              {cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado").length===0&&!cLoading ? (
+              {cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado"&&(!cashierMesa||o.table_label===cashierMesa)).length===0&&!cLoading ? (
                 <div style={{textAlign:"center" as const,padding:"60px 20px"}}>
-                  <p style={{fontWeight:800,fontSize:20,color:MUTED}}>Sin pedidos pendientes</p>
+                  <p style={{fontWeight:800,fontSize:20,color:MUTED}}>{cashierMesa?`Sin pedidos pendientes en ${cashierMesa}`:"Sin pedidos pendientes"}</p>
                 </div>
               ) : (
                 <div style={{display:"flex",flexDirection:"column",gap:12}}>
-                  {cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado").map(o=>{
+                  {cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado"&&(!cashierMesa||o.table_label===cashierMesa)).map(o=>{
                     const canPay=o.status==="listo", busy=paying===o.id;
                     const time=new Date(o.created_at).toLocaleTimeString("es-EC",{hour:"2-digit",minute:"2-digit"});
                     return (
@@ -1139,7 +1791,8 @@ export default function App() {
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
                           <div>
                             <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:4}}>#{o.order_number} · {time}</p>
-                            <p style={{fontSize:22,fontWeight:900,color:DARK,marginBottom:6}}>{o.table_label}</p>
+                            <p style={{fontSize:22,fontWeight:900,color:DARK,marginBottom:2}}>{o.table_label}</p>
+                            {o.customer_name && <p style={{fontSize:13,fontWeight:800,color:GOLD,marginBottom:4}}>👤 {o.customer_name}</p>}
                             <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Preparando":"Listo para cobrar"}</span>
                           </div>
                       <div style={{display:"flex",flexDirection:"column" as const,alignItems:"flex-end",gap:8}}>
@@ -1182,6 +1835,10 @@ export default function App() {
                       <button disabled={!canPay||busy} onClick={()=>{setSplitModal(o);setSplitAmounts({efectivo:"",tarjeta:"",transferencia:""});}}
                         style={{...btn(CREAM2,DARK,!canPay||busy),flex:1,minWidth:100,height:50,fontSize:13,border:`1px solid ${BORDER}`}}>
                         Dividir
+                      </button>
+                      <button disabled={busy} onClick={()=>setMoveOrder(o)}
+                        style={{...btn(CREAM2,DARK,busy),minWidth:90,height:50,fontSize:13,border:`1px solid ${BORDER}`}}>
+                        Mover ⇄
                       </button>
                     </div>
                   </div>
@@ -1241,12 +1898,16 @@ export default function App() {
               <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:2}}>Panel</p>
               <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK}}>Administración</h1>
             </div>
-            <div style={{display:"flex",gap:8}}>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
               <button onClick={()=>{setAdminSection("stats");loadAdminStats();}} style={{...btn(adminSection==="stats"?RED:CREAM2, adminSection==="stats"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Reportes</button>
+              <button onClick={()=>{setAdminSection("history");loadHistory();}} style={{...btn(adminSection==="history"?RED:CREAM2, adminSection==="history"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Pedidos</button>
+              <button onClick={()=>{setAdminSection("expenses");loadExpenses();}} style={{...btn(adminSection==="expenses"?RED:CREAM2, adminSection==="expenses"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Gastos</button>
               <button onClick={()=>{setAdminSection("products");loadAdminProducts();}} style={{...btn(adminSection==="products"?RED:CREAM2, adminSection==="products"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Productos</button>
               <button onClick={()=>{setAdminSection("notes");loadNotes();}} style={{...btn(adminSection==="notes"?RED:CREAM2, adminSection==="notes"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Notas</button>
               <button onClick={()=>{setAdminSection("inventory");loadInventory();}} style={{...btn(adminSection==="inventory"?RED:CREAM2, adminSection==="inventory"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Inventario</button>
+              <button onClick={()=>{setAdminSection("waste");loadWaste();}} style={{...btn(adminSection==="waste"?RED:CREAM2, adminSection==="waste"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Mermas</button>
               <button onClick={()=>{setAdminSection("users");loadUsers();}} style={{...btn(adminSection==="users"?RED:CREAM2, adminSection==="users"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Usuarios</button>
+              <button onClick={()=>{setAdminSection("config");loadConfig();loadAdminProducts();}} style={{...btn(adminSection==="config"?RED:CREAM2, adminSection==="config"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Config</button>
             </div>
           </div>
 
@@ -1286,6 +1947,72 @@ export default function App() {
                 <p style={{fontSize:22,fontWeight:900,color:DARK}}>{$(adminStats?.payBreakdown.transferencia||0)}</p>
               </div>
 
+              {/* Utilidad del período */}
+              {(()=>{
+                const ingresos = adminStats?.todayRevenue||0;
+                const gastos = adminStats?.expensesTotal||0;
+                const fijos = adminStats?.fixedTotal||0;
+                const mermas = adminStats?.wasteTotal||0;
+                const utilidad = ingresos - gastos - fijos - mermas;
+                return (
+                  <div style={{...card,padding:16,marginBottom:20}}>
+                    <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:12}}>
+                      Utilidad {adminMode==="day"?"del día":"del mes"}
+                    </p>
+                    {[
+                      {l:"Ingresos (cobrado)",v:ingresos,c:GREEN,sign:"+"},
+                      {l:"Gastos del período",v:gastos,c:ALERT_RED,sign:"−"},
+                      ...(adminMode==="month"?[{l:"Gastos fijos mensuales",v:fijos,c:ALERT_RED,sign:"−"}]:[]),
+                      {l:"Mermas (valor de venta)",v:mermas,c:ALERT_RED,sign:"−"},
+                    ].map(({l,v,c,sign})=>(
+                      <div key={l} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${BORDER}44`}}>
+                        <span style={{fontSize:13,fontWeight:600,color:MUTED}}>{l}</span>
+                        <span style={{fontSize:14,fontWeight:800,color:c}}>{sign}{$(v)}</span>
+                      </div>
+                    ))}
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 14px",marginTop:10,borderRadius:10,
+                      background:utilidad>=0?"rgba(47,125,50,0.1)":"#FFEBEE",border:`1.5px solid ${utilidad>=0?GREEN:ALERT_RED}`}}>
+                      <span style={{fontSize:14,fontWeight:800,color:DARK}}>Utilidad</span>
+                      <span style={{fontSize:22,fontWeight:900,color:utilidad>=0?GREEN:ALERT_RED}}>{$(utilidad)}</span>
+                    </div>
+                    {adminMode==="day" && <p style={{fontSize:11,fontWeight:600,color:MUTED,marginTop:8}}>Los gastos fijos (alquiler, servicios…) solo se restan en el reporte mensual.</p>}
+                  </div>
+                );
+              })()}
+
+              {/* Cierre de caja del día */}
+              {adminMode==="day" && (
+                <div style={{...card,padding:16,marginBottom:20}}>
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:12}}>Cierre de caja — {adminDate}</p>
+                  {!dayClosure ? (
+                    <p style={{fontSize:13,color:MUTED,fontWeight:600}}>Sin cierre registrado ese día (se hace desde la pantalla de Caja)</p>
+                  ) : (
+                    <>
+                      {[
+                        {l:"Efectivo esperado (sistema)",v:$(dayClosure.expected_cash)},
+                        {l:"Efectivo contado",v:$(dayClosure.counted_cash)},
+                      ].map(({l,v})=>(
+                        <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid ${BORDER}44`}}>
+                          <span style={{fontSize:13,fontWeight:600,color:MUTED}}>{l}</span>
+                          <span style={{fontSize:14,fontWeight:800,color:DARK}}>{v}</span>
+                        </div>
+                      ))}
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",marginTop:10,borderRadius:10,
+                        background:Math.abs(dayClosure.difference)<0.01?"rgba(47,125,50,0.1)":"#FFEBEE",
+                        border:`1.5px solid ${Math.abs(dayClosure.difference)<0.01?GREEN:ALERT_RED}`}}>
+                        <span style={{fontSize:13,fontWeight:800,color:DARK}}>Diferencia</span>
+                        <span style={{fontSize:18,fontWeight:900,color:Math.abs(dayClosure.difference)<0.01?GREEN:ALERT_RED}}>
+                          {dayClosure.difference>0?"+":""}{$(dayClosure.difference)}
+                        </span>
+                      </div>
+                      <p style={{fontSize:11,fontWeight:600,color:MUTED,marginTop:8}}>
+                        {dayClosure.closer_name?`Cerrado por ${dayClosure.closer_name}`:""}{dayClosure.notes?` · "${dayClosure.notes}"`:""}
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+
               {/* Top productos */}
               <div style={{...card,padding:16}}>
                 <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Top productos</p>
@@ -1307,7 +2034,7 @@ export default function App() {
 
               {/* Gráfica ventas por hora */}
               <div style={{...card,padding:16,marginTop:16}}>
-                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:16}}>Ventas por hora — hoy</p>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:16}}>Ventas por hora — {adminMode==="day"?adminDate:adminMonth}</p>
                 {(()=>{
                   const data = adminStats?.hourlyData||Array(24).fill(0);
                   const max = Math.max(...data, 1);
@@ -1346,7 +2073,7 @@ export default function App() {
                 </div>
                 <select value={newProd.category} onChange={e=>setNewProd(p=>({...p,category:e.target.value}))}
                   style={{width:"100%",padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none",marginBottom:10}}>
-                  {CAT_ORDER.map(c=><option key={c} value={c}>{c}</option>)}
+                  {catList.map(c=><option key={c} value={c}>{c}</option>)}
                 </select>
                 <textarea placeholder="Descripción (opcional) — ej: Pan artesanal, pollo a la plancha, queso gouda, lechuga y tomate"
                   value={newProd.description} onChange={e=>setNewProd(p=>({...p,description:e.target.value}))}
@@ -1362,7 +2089,7 @@ export default function App() {
               <div style={{...card,padding:16}}>
                 <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Productos ({adminProducts.length})</p>
                 <div style={{display:"flex",flexDirection:"column" as const,gap:6}}>
-                  {CAT_ORDER.filter(c=>adminProducts.some(p=>p.category===c)).map(cat=>(
+                  {catsFor(adminProducts).filter(c=>adminProducts.some(p=>p.category===c)).map(cat=>(
                     <div key={cat}>
                       <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",padding:"8px 0 4px"}}>{cat}</p>
                       {adminProducts.filter(p=>p.category===cat).map(p=>(
@@ -1397,7 +2124,7 @@ export default function App() {
                               </div>
                               <select value={editProd.category} onChange={e=>setEditProd(ep=>ep?{...ep,category:e.target.value}:ep)}
                                 style={{width:"100%",padding:"9px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:8}}>
-                                {CAT_ORDER.map(c=><option key={c} value={c}>{c}</option>)}
+                                {catList.map(c=><option key={c} value={c}>{c}</option>)}
                               </select>
                               <textarea placeholder="Descripción (opcional)" value={editProd.description} onChange={e=>setEditProd(ep=>ep?{...ep,description:e.target.value}:ep)}
                                 rows={2} style={{width:"100%",padding:"9px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",resize:"vertical" as const,marginBottom:10}}/>
@@ -1518,7 +2245,7 @@ export default function App() {
                             return (
                               <div key={ingr.id} style={{border:`2px solid ${stockColor(ingr)}22`,borderRadius:open?"12px 12px 0 0":"12px",overflow:"hidden"}}>
                                 {/* Fila principal */}
-                                <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",background:"#fff",borderLeft:`4px solid ${stockColor(ingr)}`}}>
+                                <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",background:"#fff",borderLeft:`4px solid ${stockColor(ingr)}`,flexWrap:"wrap" as const}}>
                                   <div style={{flex:1,minWidth:0}}>
                                     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
                                       <span style={{fontSize:14,fontWeight:800,color:DARK,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" as const}}>{ingr.name}</span>
@@ -1606,7 +2333,7 @@ export default function App() {
                       <select value={recipeProductId} onChange={e=>setRecipeProductId(e.target.value)}
                         style={{width:"100%",padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}>
                         <option value="">— Elegir producto —</option>
-                        {CAT_ORDER.map(cat=>{
+                        {catsFor(adminProducts).map(cat=>{
                           const prods = adminProducts.filter(p=>p.category===cat);
                           if (!prods.length) return null;
                           return <optgroup key={cat} label={cat}>{prods.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>;
@@ -1660,6 +2387,320 @@ export default function App() {
                     )}
                   </div>
                 )}
+              </div>
+            );
+          })()}
+
+          {adminSection==="history" && (() => {
+            const shown = histOrders.filter(o=>o.status===histStatus);
+            const totalPeriod = histOrders.filter(o=>o.status==="pagado").reduce((s,o)=>s+o.total,0);
+            const methodLabel: Record<string,string> = { efectivo:"Efectivo", tarjeta:"Tarjeta", transferencia:"Transferencia" };
+            return (
+              <div>
+                {/* Selector período */}
+                <div style={{display:"flex",flexWrap:"wrap" as const,gap:8,marginBottom:16,alignItems:"center"}}>
+                  <button onClick={()=>setAdminMode("day")} style={{...btn(adminMode==="day"?RED:CREAM2,adminMode==="day"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por día</button>
+                  <button onClick={()=>setAdminMode("month")} style={{...btn(adminMode==="month"?RED:CREAM2,adminMode==="month"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por mes</button>
+                  {adminMode==="day"
+                    ? <input type="date" value={adminDate} onChange={e=>setAdminDate(e.target.value)}
+                        style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                    : <input type="month" value={adminMonth} onChange={e=>setAdminMonth(e.target.value)}
+                        style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                  }
+                  <button onClick={loadHistory} style={{...btn(CREAM2,DARK),height:38,padding:"0 16px",fontSize:13}}>↻</button>
+                </div>
+
+                {/* Resumen + filtro estado */}
+                <div style={{display:"flex",gap:10,flexWrap:"wrap" as const,alignItems:"center",marginBottom:16}}>
+                  <div style={{background:DARK,borderRadius:12,padding:"12px 18px"}}>
+                    <p style={{fontSize:20,fontWeight:900,color:GOLD,lineHeight:1}}>{$(totalPeriod)}</p>
+                    <p style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase" as const,letterSpacing:"0.08em",marginTop:3}}>{histOrders.filter(o=>o.status==="pagado").length} cobrados</p>
+                  </div>
+                  <div style={{display:"flex",gap:6,marginLeft:"auto"}}>
+                    {(["pagado","cancelado"] as const).map(s=>(
+                      <button key={s} onClick={()=>setHistStatus(s)} style={{...btn(histStatus===s?RED:CREAM2,histStatus===s?"#fff":DARK),height:36,padding:"0 14px",fontSize:12,minHeight:36}}>
+                        {s==="pagado"?"Pagados":"Cancelados"} ({histOrders.filter(o=>o.status===s).length})
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Lista */}
+                {shown.length===0 && <div style={{textAlign:"center" as const,padding:"40px 20px"}}><p style={{fontWeight:800,fontSize:17,color:MUTED}}>Sin pedidos {histStatus==="pagado"?"cobrados":"cancelados"} en este período</p></div>}
+                <div style={{display:"flex",flexDirection:"column" as const,gap:8}}>
+                  {shown.map(o=>{
+                    const pays = histPayments[o.id]||[];
+                    const open = histExpanded===o.id;
+                    return (
+                      <div key={o.id} style={{...card,padding:0,overflow:"hidden"}}>
+                        <button onClick={()=>setHistExpanded(open?null:o.id)} style={{width:"100%",background:"transparent",border:"none",cursor:"pointer",fontFamily:FONT,textAlign:"left" as const,
+                          display:"flex",alignItems:"center",gap:12,padding:"12px 16px",flexWrap:"wrap" as const}}>
+                          <div style={{flex:1,minWidth:160}}>
+                            <p style={{fontSize:14,fontWeight:900,color:DARK}}>
+                              #{o.order_number} · {o.table_label}{o.customer_name?` · ${o.customer_name}`:""}
+                            </p>
+                            <p style={{fontSize:11,fontWeight:600,color:MUTED,marginTop:2}}>
+                              Pedido: {new Date(o.created_at).toLocaleString("es-EC",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}
+                              {o.status==="pagado" && pays[0]?.created_at ? ` → Cobrado: ${new Date(pays[0].created_at).toLocaleString("es-EC",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}` : ""}
+                            </p>
+                            {o.status==="pagado" && pays.length>0 && (
+                              <p style={{fontSize:11,fontWeight:700,color:GOLD,marginTop:2}}>
+                                {pays.map(p=>`${methodLabel[p.method]||p.method} ${$(p.amount)}`).join(" + ")}
+                              </p>
+                            )}
+                          </div>
+                          <span style={badge(o.status)}>{o.status==="pagado"?"Pagado":"Cancelado"}</span>
+                          <span style={{fontSize:16,fontWeight:900,color:o.status==="pagado"?GREEN:MUTED}}>{$(o.total)}</span>
+                          <span style={{fontSize:12,color:MUTED,fontWeight:700}}>{open?"▲":"▼"}</span>
+                        </button>
+                        {open && (
+                          <div style={{background:CREAM,padding:"10px 16px",display:"flex",flexDirection:"column" as const,gap:6}}>
+                            {(o.order_items||[]).map(i=>(
+                              <div key={i.id}>
+                                <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:700,color:DARK}}>
+                                  <span>{i.quantity}× {i.product_name}</span>
+                                  <span>{$(i.quantity*i.unit_price)}</span>
+                                </div>
+                                {i.notes && <p style={{fontSize:11,fontWeight:600,color:MUTED}}>Nota: {i.notes}</p>}
+                              </div>
+                            ))}
+                            {(o.order_items||[]).length===0 && <p style={{fontSize:12,color:MUTED,fontWeight:600}}>Sin detalle de items</p>}
+                            {o.table_note && <p style={{fontSize:12,fontWeight:700,color:DARK,marginTop:4}}>Nota de mesa: {o.table_note}</p>}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
+          {adminSection==="expenses" && (() => {
+            const totalVar = expenses.reduce((s,e)=>s+e.amount,0);
+            const activeFixed = fixedExpenses.filter(f=>f.active);
+            const totalFixed = activeFixed.reduce((s,f)=>s+f.amount,0);
+            return (
+              <div>
+                {/* Selector período */}
+                <div style={{display:"flex",flexWrap:"wrap" as const,gap:8,marginBottom:16,alignItems:"center"}}>
+                  <button onClick={()=>setAdminMode("day")} style={{...btn(adminMode==="day"?RED:CREAM2,adminMode==="day"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por día</button>
+                  <button onClick={()=>setAdminMode("month")} style={{...btn(adminMode==="month"?RED:CREAM2,adminMode==="month"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por mes</button>
+                  {adminMode==="day"
+                    ? <input type="date" value={adminDate} onChange={e=>setAdminDate(e.target.value)}
+                        style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                    : <input type="month" value={adminMonth} onChange={e=>setAdminMonth(e.target.value)}
+                        style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                  }
+                  <button onClick={loadExpenses} style={{...btn(CREAM2,DARK),height:38,padding:"0 16px",fontSize:13}}>↻</button>
+                </div>
+
+                {expenseMsg && (
+                  <div style={{marginBottom:14,borderRadius:12,padding:"12px 16px",fontSize:14,fontWeight:700,
+                    background:expenseMsg.startsWith("Error")?"#FFEBEE":"rgba(47,125,50,0.1)",
+                    border:`1.5px solid ${expenseMsg.startsWith("Error")?ALERT_RED:GREEN}`,
+                    color:expenseMsg.startsWith("Error")?ALERT_RED:GREEN}}>
+                    {expenseMsg}
+                  </div>
+                )}
+
+                {/* Resumen */}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:20}}>
+                  {[
+                    {v:$(totalVar),l:adminMode==="day"?"Gastos del día":"Gastos del mes",bg:ALERT_RED,fg:"#fff"},
+                    {v:$(totalFixed),l:"Gastos fijos / mes",bg:DARK,fg:"#fff"},
+                    ...(adminMode==="month"?[{v:$(totalVar+totalFixed),l:"Total del mes",bg:GOLD,fg:DARK}]:[]),
+                  ].map(({v,l,bg,fg})=>(
+                    <div key={l} style={{background:bg,borderRadius:14,padding:"16px"}}>
+                      <p style={{fontSize:"clamp(18px,3vw,26px)",fontWeight:900,color:fg,lineHeight:1,marginBottom:4}}>{v}</p>
+                      <p style={{fontSize:11,fontWeight:700,color:fg,opacity:0.65,textTransform:"uppercase" as const,letterSpacing:"0.08em"}}>{l}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Agregar gasto */}
+                <div style={{...card,padding:16,marginBottom:20}}>
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Registrar gasto</p>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:10}}>
+                    <input type="date" value={newExpense.expense_date} onChange={e=>setNewExpense(x=>({...x,expense_date:e.target.value}))}
+                      style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                    <select value={newExpense.category} onChange={e=>setNewExpense(x=>({...x,category:e.target.value}))}
+                      style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}>
+                      {EXPENSE_CATS.map(c=><option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <input placeholder="¿Qué se compró / pagó?" value={newExpense.description} onChange={e=>setNewExpense(x=>({...x,description:e.target.value}))}
+                      style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                    <input placeholder="Monto" type="number" min="0" step="0.01" value={newExpense.amount} onChange={e=>setNewExpense(x=>({...x,amount:e.target.value}))}
+                      style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                  </div>
+                  <button onClick={addExpense} disabled={!newExpense.description.trim()||!parseFloat(newExpense.amount)}
+                    style={{...btn(RED,"#fff",!newExpense.description.trim()||!parseFloat(newExpense.amount)),width:"100%",height:46}}>
+                    Registrar gasto
+                  </button>
+                </div>
+
+                {/* Lista de gastos del período */}
+                <div style={{...card,padding:16,marginBottom:20}}>
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Gastos del período ({expenses.length})</p>
+                  {expenses.length===0 && <p style={{fontSize:13,color:MUTED,fontWeight:600}}>Sin gastos registrados en este período</p>}
+                  <div style={{display:"flex",flexDirection:"column" as const,gap:8}}>
+                    {expenses.map(e=>(
+                      <div key={e.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:CREAM,borderRadius:10,flexWrap:"wrap" as const}}>
+                        <div style={{flex:1,minWidth:180}}>
+                          <p style={{fontSize:14,fontWeight:800,color:DARK}}>
+                            {e.description}
+                            <span style={{fontSize:11,fontWeight:700,color:MUTED,background:CREAM2,borderRadius:99,padding:"2px 8px",marginLeft:8}}>{e.category}</span>
+                          </p>
+                          <p style={{fontSize:11,fontWeight:600,color:MUTED,marginTop:2}}>
+                            {new Date(e.expense_date+"T00:00:00").toLocaleDateString("es-EC",{day:"2-digit",month:"2-digit",year:"numeric"})}
+                            {e.creator_name?` · ${e.creator_name}`:""}
+                          </p>
+                        </div>
+                        <span style={{fontSize:15,fontWeight:900,color:ALERT_RED}}>−{$(e.amount)}</span>
+                        <button onClick={()=>deleteExpense(e.id)}
+                          style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Gastos fijos */}
+                <div style={{...card,padding:16}}>
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:4}}>Gastos fijos mensuales</p>
+                  <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:14}}>Alquiler, servicios, sueldos… Se restan automáticamente en el reporte mensual mientras estén activos.</p>
+                  <div style={{display:"flex",flexDirection:"column" as const,gap:8,marginBottom:14}}>
+                    {fixedExpenses.length===0 && <p style={{fontSize:13,color:MUTED,fontWeight:600}}>Sin gastos fijos — agrega el primero abajo</p>}
+                    {fixedExpenses.map(f=>(
+                      <div key={f.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:CREAM,borderRadius:10,flexWrap:"wrap" as const,opacity:f.active?1:0.5}}>
+                        <div style={{flex:1,minWidth:150}}>
+                          <p style={{fontSize:14,fontWeight:800,color:DARK}}>{f.name}</p>
+                          <p style={{fontSize:11,fontWeight:600,color:MUTED}}>{f.category}</p>
+                        </div>
+                        <span style={{fontSize:15,fontWeight:900,color:DARK}}>{$(f.amount)}<span style={{fontSize:11,fontWeight:600,color:MUTED}}>/mes</span></span>
+                        <button onClick={()=>toggleFixed(f.id,f.active)}
+                          style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
+                            background:f.active?GREEN:CREAM2,color:f.active?"#fff":DARK}}>
+                          {f.active?"Activo":"Pausado"}
+                        </button>
+                        <button onClick={()=>deleteFixed(f.id)}
+                          style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:10}}>
+                    <input placeholder="Nombre — ej: Alquiler local" value={newFixed.name} onChange={e=>setNewFixed(x=>({...x,name:e.target.value}))}
+                      style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                    <select value={newFixed.category} onChange={e=>setNewFixed(x=>({...x,category:e.target.value}))}
+                      style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}>
+                      {EXPENSE_CATS.filter(c=>c!=="Compras / Insumos").map(c=><option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <input placeholder="Monto mensual" type="number" min="0" step="0.01" value={newFixed.amount} onChange={e=>setNewFixed(x=>({...x,amount:e.target.value}))}
+                      style={{padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                  </div>
+                  <button onClick={addFixed} disabled={!newFixed.name.trim()||!parseFloat(newFixed.amount)}
+                    style={{...btn(DARK,"#fff",!newFixed.name.trim()||!parseFloat(newFixed.amount)),width:"100%",height:44,fontSize:13}}>
+                    Agregar gasto fijo
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
+          {adminSection==="waste" && (() => {
+            const totalQty = wasteList.reduce((s,w)=>s+w.quantity,0);
+            const totalValue = wasteList.reduce((s,w)=>s+w.quantity*w.unit_price,0);
+            const byReason: Record<string,number> = {};
+            wasteList.forEach(w=>{ byReason[w.reason]=(byReason[w.reason]||0)+w.quantity; });
+            const topReason = Object.entries(byReason).sort((a,b)=>b[1]-a[1])[0];
+            return (
+              <div>
+                {/* Selector período + registrar */}
+                <div style={{display:"flex",flexWrap:"wrap" as const,gap:8,marginBottom:16,alignItems:"center"}}>
+                  <button onClick={()=>setAdminMode("day")} style={{...btn(adminMode==="day"?RED:CREAM2,adminMode==="day"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por día</button>
+                  <button onClick={()=>setAdminMode("month")} style={{...btn(adminMode==="month"?RED:CREAM2,adminMode==="month"?"#fff":DARK),height:38,padding:"0 16px",fontSize:13}}>Por mes</button>
+                  {adminMode==="day"
+                    ? <input type="date" value={adminDate} onChange={e=>setAdminDate(e.target.value)}
+                        style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                    : <input type="month" value={adminMonth} onChange={e=>setAdminMonth(e.target.value)}
+                        style={{height:38,padding:"0 12px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none"}}/>
+                  }
+                  <button onClick={loadWaste} style={{...btn(CREAM2,DARK),height:38,padding:"0 16px",fontSize:13}}>↻</button>
+                  <button onClick={()=>{setNewWaste({product_id:"",quantity:"1",reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
+                    style={{...btn(RED,"#fff"),height:38,padding:"0 16px",fontSize:13,marginLeft:"auto"}}>
+                    + Registrar baja
+                  </button>
+                </div>
+
+                {wasteMsg && (
+                  <div style={{marginBottom:14,borderRadius:12,padding:"12px 16px",fontSize:14,fontWeight:700,
+                    background:wasteMsg.startsWith("Error")?"#FFEBEE":"rgba(47,125,50,0.1)",
+                    border:`1.5px solid ${wasteMsg.startsWith("Error")?ALERT_RED:GREEN}`,
+                    color:wasteMsg.startsWith("Error")?ALERT_RED:GREEN}}>
+                    {wasteMsg}
+                  </div>
+                )}
+
+                {/* Resumen */}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:16}}>
+                  {[
+                    {v:String(totalQty),l:"Unidades de baja",bg:DARK,fg:"#fff"},
+                    {v:$(totalValue),l:"Valor perdido (precio venta)",bg:ALERT_RED,fg:"#fff"},
+                    {v:topReason?`${topReason[0]}`:"—",l:"Motivo más común",bg:GOLD,fg:DARK},
+                  ].map(({v,l,bg,fg})=>(
+                    <div key={l} style={{background:bg,borderRadius:14,padding:"16px"}}>
+                      <p style={{fontSize:"clamp(16px,3vw,24px)",fontWeight:900,color:fg,lineHeight:1.1,marginBottom:4}}>{v}</p>
+                      <p style={{fontSize:11,fontWeight:700,color:fg,opacity:0.65,textTransform:"uppercase" as const,letterSpacing:"0.08em"}}>{l}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Desglose por motivo */}
+                {Object.keys(byReason).length>0 && (
+                  <div style={{...card,padding:14,marginBottom:16}}>
+                    <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:10}}>Por motivo</p>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
+                      {Object.entries(byReason).sort((a,b)=>b[1]-a[1]).map(([r,q])=>(
+                        <span key={r} style={{padding:"6px 14px",borderRadius:99,fontSize:13,fontWeight:800,background:CREAM,border:`1px solid ${BORDER}`,color:DARK}}>
+                          {r} <span style={{color:ALERT_RED}}>×{q}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Lista */}
+                <div style={{...card,padding:16}}>
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>
+                    Registros ({wasteList.length})
+                  </p>
+                  {wasteList.length===0 && <p style={{fontSize:13,color:MUTED,fontWeight:600}}>Sin bajas en este período 🎉</p>}
+                  <div style={{display:"flex",flexDirection:"column" as const,gap:8}}>
+                    {wasteList.map(w=>(
+                      <div key={w.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:CREAM,borderRadius:10,flexWrap:"wrap" as const}}>
+                        <div style={{flex:1,minWidth:180}}>
+                          <p style={{fontSize:14,fontWeight:800,color:DARK}}>
+                            {w.quantity}× {w.product_name}
+                            <span style={{fontSize:11,fontWeight:700,color:ALERT_RED,background:"rgba(198,40,40,0.1)",borderRadius:99,padding:"2px 8px",marginLeft:8}}>{w.reason}</span>
+                          </p>
+                          <p style={{fontSize:11,fontWeight:600,color:MUTED,marginTop:2}}>
+                            {new Date(w.created_at).toLocaleString("es-EC",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}
+                            {w.reporter_name?` · ${w.reporter_name}`:""}
+                            {w.notes?` · "${w.notes}"`:""}
+                          </p>
+                        </div>
+                        <span style={{fontSize:14,fontWeight:900,color:ALERT_RED}}>−{$(w.quantity*w.unit_price)}</span>
+                        <button onClick={()=>deleteWaste(w.id)}
+                          style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             );
           })()}
@@ -1747,6 +2788,80 @@ export default function App() {
             );
           })()}
 
+          {adminSection==="config" && (
+            <div>
+              {cfgMsg && (
+                <div style={{marginBottom:14,borderRadius:12,padding:"12px 16px",fontSize:14,fontWeight:700,background:"#FFEBEE",border:`1.5px solid ${ALERT_RED}`,color:ALERT_RED}}>
+                  {cfgMsg}
+                </div>
+              )}
+
+              {/* Mesas */}
+              <div style={{...card,padding:16,marginBottom:20}}>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:4}}>Mesas ({cfgTables.length})</p>
+                <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:14}}>El orden de aquí es el orden en el mapa de mesas. Pausar una mesa la oculta sin borrar su historial.</p>
+                {cfgTables.length===0 && <p style={{fontSize:13,color:MUTED,fontWeight:600,marginBottom:10}}>Sin datos — corre fase5-config.sql en Supabase para activar esta sección</p>}
+                <div style={{display:"flex",flexDirection:"column" as const,gap:6,marginBottom:14}}>
+                  {cfgTables.map((t,i)=>(
+                    <div key={t.id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:CREAM,borderRadius:10,flexWrap:"wrap" as const,opacity:t.active?1:0.5}}>
+                      <span style={{flex:1,fontSize:14,fontWeight:800,color:DARK,minWidth:100}}>{t.label}</span>
+                      <button disabled={i===0} onClick={()=>swapSort("tables",cfgTables,i,-1)}
+                        style={{width:32,height:32,borderRadius:8,border:`1px solid ${BORDER}`,background:CREAM2,color:DARK,fontWeight:900,cursor:i===0?"not-allowed":"pointer",fontFamily:FONT,opacity:i===0?0.4:1}}>↑</button>
+                      <button disabled={i===cfgTables.length-1} onClick={()=>swapSort("tables",cfgTables,i,1)}
+                        style={{width:32,height:32,borderRadius:8,border:`1px solid ${BORDER}`,background:CREAM2,color:DARK,fontWeight:900,cursor:i===cfgTables.length-1?"not-allowed":"pointer",fontFamily:FONT,opacity:i===cfgTables.length-1?0.4:1}}>↓</button>
+                      <button onClick={()=>toggleMesaCfg(t.id,t.active)}
+                        style={{padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
+                          background:t.active?GREEN:CREAM2,color:t.active?"#fff":DARK}}>
+                        {t.active?"Activa":"Pausada"}
+                      </button>
+                      <button onClick={()=>deleteMesaCfg(t.id,t.label)}
+                        style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>✕</button>
+                    </div>
+                  ))}
+                </div>
+                <div style={{display:"flex",gap:8}}>
+                  <input placeholder="Nueva mesa — ej: Mesa 10, Terraza 1" value={newMesaLabel}
+                    onChange={e=>setNewMesaLabel(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addMesaCfg()}
+                    style={{flex:1,padding:"11px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                  <button onClick={addMesaCfg} disabled={!newMesaLabel.trim()}
+                    style={{...btn(RED,"#fff",!newMesaLabel.trim()),padding:"0 18px",height:46,whiteSpace:"nowrap" as const}}>Agregar</button>
+                </div>
+              </div>
+
+              {/* Categorías */}
+              <div style={{...card,padding:16}}>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:4}}>Categorías del menú ({cfgCats.length})</p>
+                <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:14}}>El orden de aquí es el orden de las pestañas del mesero.</p>
+                {cfgCats.length===0 && <p style={{fontSize:13,color:MUTED,fontWeight:600,marginBottom:10}}>Sin datos — corre fase5-config.sql en Supabase para activar esta sección</p>}
+                <div style={{display:"flex",flexDirection:"column" as const,gap:6,marginBottom:14}}>
+                  {cfgCats.map((c,i)=>{
+                    const count = adminProducts.filter(p=>p.category===c.name).length;
+                    return (
+                      <div key={c.id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:CREAM,borderRadius:10,flexWrap:"wrap" as const}}>
+                        <span style={{flex:1,fontSize:14,fontWeight:800,color:DARK,minWidth:100}}>
+                          {c.name} <span style={{fontSize:11,fontWeight:600,color:MUTED}}>({count} prod.)</span>
+                        </span>
+                        <button disabled={i===0} onClick={()=>swapSort("categories",cfgCats,i,-1)}
+                          style={{width:32,height:32,borderRadius:8,border:`1px solid ${BORDER}`,background:CREAM2,color:DARK,fontWeight:900,cursor:i===0?"not-allowed":"pointer",fontFamily:FONT,opacity:i===0?0.4:1}}>↑</button>
+                        <button disabled={i===cfgCats.length-1} onClick={()=>swapSort("categories",cfgCats,i,1)}
+                          style={{width:32,height:32,borderRadius:8,border:`1px solid ${BORDER}`,background:CREAM2,color:DARK,fontWeight:900,cursor:i===cfgCats.length-1?"not-allowed":"pointer",fontFamily:FONT,opacity:i===cfgCats.length-1?0.4:1}}>↓</button>
+                        <button onClick={()=>deleteCatCfg(c.id,c.name)}
+                          style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>✕</button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{display:"flex",gap:8}}>
+                  <input placeholder="Nueva categoría — ej: Jugos" value={newCatName}
+                    onChange={e=>setNewCatName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCatCfg()}
+                    style={{flex:1,padding:"11px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                  <button onClick={addCatCfg} disabled={!newCatName.trim()}
+                    style={{...btn(RED,"#fff",!newCatName.trim()),padding:"0 18px",height:46,whiteSpace:"nowrap" as const}}>Agregar</button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {adminSection==="notes" && (
             <div>
               {/* Agregar nota */}
@@ -1754,7 +2869,7 @@ export default function App() {
                 <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar nota / extra</p>
                 <select value={newNote.category} onChange={e=>setNewNote(n=>({...n,category:e.target.value}))}
                   style={{width:"100%",padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none",marginBottom:10}}>
-                  {CAT_ORDER.map(c=><option key={c} value={c}>{c}</option>)}
+                  {catList.map(c=><option key={c} value={c}>{c}</option>)}
                 </select>
                 <div style={{display:"flex",gap:8}}>
                   <input placeholder="Ej: Sin picante, Extra queso..." value={newNote.note}
@@ -1771,7 +2886,7 @@ export default function App() {
               {/* Lista por categoría */}
               <div style={{...card,padding:16}}>
                 <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Notas por categoría</p>
-                {CAT_ORDER.map(cat=>{
+                {[...catList, ...Object.keys(notesBycat).filter(c=>!catList.includes(c))].map(cat=>{
                   const notes = notesBycat[cat]||[];
                   return (
                     <div key={cat} style={{marginBottom:16}}>
@@ -1814,6 +2929,223 @@ export default function App() {
                 style={{...btn(CREAM2,DARK),flex:1,height:44,fontSize:14,minHeight:44}}>Cancelar</button>
               <button onClick={()=>{const fn=confirmDialog.onOk;setConfirmDialog(null);fn();}}
                 style={{...btn(RED,"#fff"),flex:1,height:44,fontSize:14,minHeight:44}}>Confirmar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL CIERRE DE CAJA ────────────────────────────────── */}
+      {closureModal && (()=>{
+        const counted = parseFloat(closureCash);
+        const expected = cPayBreakdown.efectivo;
+        const diff = isNaN(counted) ? null : Math.round((counted-expected)*100)/100;
+        return (
+          <div onClick={e=>{if(e.target===e.currentTarget)setClosureModal(false)}}
+            style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
+            <div style={{...card,padding:20,width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+                <div>
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Cierre de caja</p>
+                  <p style={{fontSize:22,fontWeight:900,color:DARK}}>{new Date().toLocaleDateString("es-EC",{day:"2-digit",month:"long"})}</p>
+                </div>
+                <button onClick={()=>setClosureModal(false)}
+                  style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
+              </div>
+
+              {closureSaved && (
+                <div style={{background:"rgba(181,137,74,0.15)",border:`1px solid ${GOLD}`,borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,fontWeight:700,color:"#8A6210"}}>
+                  Hoy ya se hizo un cierre{closureSaved.closer_name?` (${closureSaved.closer_name})`:""}. Guardar de nuevo lo reemplaza.
+                </div>
+              )}
+
+              <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:8}}>Según el sistema (cobrado hoy)</p>
+              {[
+                {l:"Efectivo",v:cPayBreakdown.efectivo},
+                {l:"Tarjeta",v:cPayBreakdown.tarjeta},
+                {l:"Transferencia",v:cPayBreakdown.transferencia},
+              ].map(({l,v})=>(
+                <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:`1px solid ${BORDER}44`}}>
+                  <span style={{fontSize:13,fontWeight:600,color:MUTED}}>{l}</span>
+                  <span style={{fontSize:14,fontWeight:800,color:DARK}}>{$(v)}</span>
+                </div>
+              ))}
+
+              <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",margin:"16px 0 8px"}}>Efectivo contado en caja</p>
+              <input type="number" min="0" step="0.01" placeholder="0.00" value={closureCash}
+                onChange={e=>setClosureCash(e.target.value)}
+                style={{width:"100%",height:52,borderRadius:10,border:`1.5px solid ${BORDER}`,padding:"0 14px",fontSize:20,fontWeight:900,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:10}}/>
+
+              {diff!==null && (
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",borderRadius:10,marginBottom:12,
+                  background:Math.abs(diff)<0.01?"rgba(47,125,50,0.1)":"#FFEBEE",
+                  border:`1.5px solid ${Math.abs(diff)<0.01?GREEN:ALERT_RED}`}}>
+                  <span style={{fontSize:13,fontWeight:800,color:DARK}}>
+                    {Math.abs(diff)<0.01?"Caja cuadrada ✓":diff>0?"Sobra efectivo":"Falta efectivo"}
+                  </span>
+                  <span style={{fontSize:18,fontWeight:900,color:Math.abs(diff)<0.01?GREEN:ALERT_RED}}>{diff>0?"+":""}{$(diff)}</span>
+                </div>
+              )}
+
+              <input type="text" placeholder="Nota (opcional) — ej: $5 de caja chica para cambio"
+                value={closureNotes} onChange={e=>setClosureNotes(e.target.value)}
+                style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,
+                  fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:14}}/>
+
+              <button disabled={isNaN(counted)||counted<0} onClick={saveClosure}
+                style={{...btn(DARK,"#fff",isNaN(counted)||counted<0),width:"100%",height:52,fontSize:15}}>
+                Guardar cierre del día
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── MODAL DAR DE BAJA (mermas) ──────────────────────────── */}
+      {wasteModal && (()=>{
+        const wasteProducts = products.length ? products : adminProducts;
+        const qty = parseFloat(newWaste.quantity)||0;
+        const selProd = wasteProducts.find(p=>p.id===newWaste.product_id);
+        return (
+          <div onClick={e=>{if(e.target===e.currentTarget)setWasteModal(false)}}
+            style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
+            <div style={{...card,padding:20,width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+                <div>
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Dar de baja</p>
+                  <p style={{fontSize:20,fontWeight:900,color:DARK}}>Producto no cobrado</p>
+                </div>
+                <button onClick={()=>setWasteModal(false)}
+                  style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
+              </div>
+
+              <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:8}}>Producto</p>
+              <select value={newWaste.product_id} onChange={e=>setNewWaste(w=>({...w,product_id:e.target.value}))}
+                style={{width:"100%",padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:12}}>
+                <option value="">— Elegir producto —</option>
+                {catsFor(wasteProducts).map(cat=>{
+                  const prods = wasteProducts.filter(p=>p.category===cat);
+                  if (!prods.length) return null;
+                  return <optgroup key={cat} label={cat}>{prods.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>;
+                })}
+              </select>
+
+              <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:8}}>Cantidad</p>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+                <button onClick={()=>setNewWaste(w=>({...w,quantity:String(Math.max(1,(parseFloat(w.quantity)||1)-1))}))}
+                  style={{width:48,height:48,borderRadius:12,fontSize:22,fontWeight:900,background:CREAM2,color:DARK,border:"none",cursor:"pointer",fontFamily:FONT}}>−</button>
+                <input type="number" min="1" value={newWaste.quantity} onChange={e=>setNewWaste(w=>({...w,quantity:e.target.value}))}
+                  style={{flex:1,height:48,borderRadius:10,border:`1.5px solid ${BORDER}`,padding:"0 12px",fontSize:18,fontWeight:800,fontFamily:FONT,color:DARK,background:"#fff",textAlign:"center" as const,outline:"none"}}/>
+                <button onClick={()=>setNewWaste(w=>({...w,quantity:String((parseFloat(w.quantity)||0)+1)}))}
+                  style={{width:48,height:48,borderRadius:12,fontSize:22,fontWeight:900,background:DARK,color:"#fff",border:"none",cursor:"pointer",fontFamily:FONT}}>+</button>
+              </div>
+
+              <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:8}}>Motivo</p>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap" as const,marginBottom:12}}>
+                {WASTE_REASONS.map(r=>(
+                  <button key={r} onClick={()=>setNewWaste(w=>({...w,reason:r}))} style={{
+                    padding:"8px 14px",borderRadius:99,fontSize:13,fontWeight:700,fontFamily:FONT,cursor:"pointer",
+                    border:`1.5px solid ${newWaste.reason===r?ALERT_RED:BORDER}`,
+                    background:newWaste.reason===r?"rgba(198,40,40,0.08)":"transparent",
+                    color:newWaste.reason===r?ALERT_RED:MUTED}}>
+                    {newWaste.reason===r?"✓ ":""}{r}
+                  </button>
+                ))}
+              </div>
+
+              <input type="text" placeholder="Detalle (opcional) — ej: se cayó al emplatar"
+                value={newWaste.notes} onChange={e=>setNewWaste(w=>({...w,notes:e.target.value}))}
+                style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,
+                  fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:14}}/>
+
+              {selProd && qty>0 && (
+                <div style={{background:"rgba(198,40,40,0.06)",border:`1px solid ${ALERT_RED}33`,borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between"}}>
+                  <span style={{fontSize:13,fontWeight:700,color:MUTED}}>Valor perdido</span>
+                  <span style={{fontSize:15,fontWeight:900,color:ALERT_RED}}>−{$(qty*selProd.price)}</span>
+                </div>
+              )}
+
+              <button disabled={!newWaste.product_id||!qty||qty<=0||wasteSaving} onClick={registerWaste}
+                style={{...btn(ALERT_RED,"#fff",!newWaste.product_id||!qty||qty<=0||wasteSaving),width:"100%",height:52,fontSize:15}}>
+                {wasteSaving?"Guardando…":"Registrar baja"}
+              </button>
+              <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:10}}>Se descuenta el inventario de sus ingredientes (si el producto tiene receta).</p>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── MODAL COBRAR MESA COMPLETA ──────────────────────────── */}
+      {mesaPayModal && (()=>{
+        const total = mesaPayModal.orders.reduce((s,o)=>s+o.total,0);
+        return (
+          <div onClick={e=>{if(e.target===e.currentTarget)setMesaPayModal(null)}}
+            style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
+            <div style={{...card,padding:20,width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+                <div>
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Cobrar mesa completa</p>
+                  <p style={{fontSize:22,fontWeight:900,color:DARK}}>{mesaPayModal.mesa}</p>
+                </div>
+                <button onClick={()=>setMesaPayModal(null)}
+                  style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
+              </div>
+
+              <div style={{display:"flex",flexDirection:"column" as const,gap:6,marginBottom:14}}>
+                {mesaPayModal.orders.map(o=>(
+                  <div key={o.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:CREAM,borderRadius:10,padding:"10px 14px"}}>
+                    <span style={{fontSize:14,fontWeight:700,color:DARK}}>#{o.order_number}{o.customer_name?` · ${o.customer_name}`:""}</span>
+                    <span style={{fontSize:14,fontWeight:900,color:RED}}>{$(o.total)}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{background:DARK,borderRadius:12,padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                <span style={{fontSize:14,color:"rgba(255,255,255,0.5)",fontWeight:600}}>Total mesa</span>
+                <span style={{fontSize:24,fontWeight:900,color:GOLD}}>{$(total)}</span>
+              </div>
+
+              <p style={{fontSize:13,fontWeight:600,color:MUTED,marginBottom:10}}>¿Con qué método paga todo?</p>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
+                {(["efectivo","tarjeta","transferencia"] as const).map(m=>{
+                  const labels={efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia"};
+                  const bgs={efectivo:DARK,tarjeta:RED,transferencia:GOLD};
+                  const fgs={efectivo:"#fff",tarjeta:"#fff",transferencia:DARK};
+                  return (
+                    <button key={m} onClick={()=>payWholeMesa(mesaPayModal.orders, m)}
+                      style={{...btn(bgs[m],fgs[m]),flex:1,minWidth:110,height:52,fontSize:14}}>
+                      {labels[m]}
+                    </button>
+                  );
+                })}
+              </div>
+              <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:10}}>Para dividir entre métodos, cobra cada pedido por separado con "Dividir".</p>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── MODAL MOVER PEDIDO ──────────────────────────────────── */}
+      {moveOrder && (
+        <div onClick={e=>{if(e.target===e.currentTarget)setMoveOrder(null)}}
+          style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
+          <div style={{...card,padding:20,width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+              <div>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Mover pedido</p>
+                <p style={{fontSize:20,fontWeight:900,color:DARK}}>#{moveOrder.order_number}{moveOrder.customer_name?` · ${moveOrder.customer_name}`:""} — {moveOrder.table_label}</p>
+              </div>
+              <button onClick={()=>setMoveOrder(null)}
+                style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
+            </div>
+            <p style={{fontSize:13,fontWeight:600,color:MUTED,marginBottom:12}}>¿A qué mesa lo movemos?</p>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:8}}>
+              {mesasList.filter(m=>m!==moveOrder.table_label).map(m=>(
+                <button key={m} onClick={()=>doMoveOrder(moveOrder, m)}
+                  style={{padding:"14px 8px",borderRadius:10,fontSize:14,fontWeight:800,fontFamily:FONT,cursor:"pointer",
+                    background:CREAM,border:`1.5px solid ${BORDER}`,color:DARK}}>
+                  {m}
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -1916,6 +3248,11 @@ export default function App() {
               <span style={{fontSize:14,color:"rgba(255,255,255,0.5)",fontWeight:600}}>Total a cobrar</span>
               <span style={{fontSize:24,fontWeight:900,color:GOLD}}>{$(cartTotal)}</span>
             </div>
+
+            <input type="text" placeholder="Nombre del cliente (opcional) — ej: Ana"
+              value={customerName} onChange={e=>setCustomerName(e.target.value)}
+              style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,
+                fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none",marginBottom:10}}/>
 
             <input type="text" placeholder="Nota de mesa (opcional) — ej: alérgico al gluten, misma cuenta…"
               value={tableNote} onChange={e=>setTableNote(e.target.value)}
