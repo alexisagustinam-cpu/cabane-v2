@@ -12,7 +12,7 @@ function getDB(): any {
 
 type Role = "waiter" | "kitchen" | "cashier" | "admin";
 type Status = "enviado" | "preparando" | "listo" | "pagado" | "cancelado";
-interface Profile { id: string; name: string; role: Role; email?: string }
+interface Profile { id: string; name: string; roles: Role[]; email?: string }
 interface Product { id: string; name: string; category: string; price: number; description?: string }
 interface OrderItem { id: string; product_id: string; product_name: string; quantity: number; unit_price: number; notes?: string }
 interface Ingredient { id: string; name: string; unit: string; stock_current: number; stock_min: number }
@@ -23,7 +23,7 @@ interface Waste { id: string; product_name: string; quantity: number; unit_price
 interface Expense { id: string; category: string; description: string; amount: number; expense_date: string; creator_name?: string; created_at: string }
 interface FixedExpense { id: string; name: string; category: string; amount: number; active: boolean }
 interface Payment { order_id: string; method: string; amount: number; created_at?: string }
-interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[]; expensesTotal:number; fixedTotal:number; wasteTotal:number; prevRevenue:number; prevCount:number; categoryBreakdown:{name:string;revenue:number}[]; expenseBreakdown:{name:string;amount:number}[]; weekdayData:number[] }
+interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[]; expensesTotal:number; fixedTotal:number; wasteTotal:number; staffTotal:number; prevRevenue:number; prevCount:number; categoryBreakdown:{name:string;revenue:number}[]; expenseBreakdown:{name:string;amount:number}[]; weekdayData:number[] }
 
 // AudioContext único, desbloqueado con el primer toque — los navegadores
 // bloquean el audio sin interacción previa y el beep fallaba en silencio.
@@ -64,10 +64,17 @@ function localDateStr(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 }
-const WASTE_REASONS = ["Se quemó","Se cayó","Mal preparado","Devuelto por cliente","Caducado","Otro"];
+const STAFF_REASON = "Consumo de personal";
+const WASTE_REASONS = ["Se quemó","Se cayó","Mal preparado","Devuelto por cliente","Caducado",STAFF_REASON,"Otro"];
 const EXPENSE_CATS = ["Compras / Insumos","Alquiler","Servicios (luz, agua, internet)","Sueldos","Mantenimiento","Otros"];
 const ROLE_SCREENS: Record<Role, string[]> = { waiter:["waiter"], kitchen:["kitchen"], cashier:["cashier"], admin:["waiter","kitchen","cashier","admin"] };
 const SL: Record<string,string> = { waiter:"Mesero", kitchen:"Cocina", cashier:"Caja", admin:"Admin" };
+const ROLE_ORDER: Role[] = ["waiter","kitchen","cashier","admin"];
+// Un usuario ve la unión de las pantallas de todos sus roles (admin ya incluía las 4)
+function screensForRoles(roles: Role[]): string[] {
+  if (roles.includes("admin")) return ROLE_SCREENS.admin;
+  return ROLE_ORDER.filter(r => roles.includes(r));
+}
 
 const FONT = "'Nunito', sans-serif";
 const RED = "#7A1E3A", DARK = "#2A1A1F", CREAM = "#EDE0CE", GOLD = "#B5894A", GREEN = "#2F7D32", MUTED = "#7A6555", BORDER = "#C4A882", CARD = "#F7F0E6", CREAM2 = "#D4BFA0";
@@ -166,9 +173,11 @@ export default function App() {
   const [kSummary, setKSummary] = useState<{name:string;qty:number}[]>([]);
   const [adminUsers, setAdminUsers] = useState<Profile[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
-  const [newUser, setNewUser] = useState({name:"",email:"",password:"",role:"waiter" as Role});
+  const [newUser, setNewUser] = useState({name:"",email:"",password:"",roles:["waiter"] as Role[]});
   const [userMsg, setUserMsg] = useState("");
-  const [editRole, setEditRole] = useState<{id:string;role:Role}|null>(null);
+  const [editRoles, setEditRoles] = useState<{id:string;roles:Role[]}|null>(null);
+  const [editProfile, setEditProfile] = useState<{id:string;name:string;email:string}|null>(null);
+  const [resetPwFor, setResetPwFor] = useState<{id:string;password:string}|null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{msg:string;onOk:()=>void}|null>(null);
   const askConfirm = (msg:string, onOk:()=>void) => setConfirmDialog({msg,onOk});
   // Fase 2: mapa de mesas, nombre de cliente, cobro por mesa y mover pedidos
@@ -287,7 +296,7 @@ export default function App() {
     const p = data as Profile;
     setProfile(p);
     const saved = localStorage.getItem("cabane_screen");
-    const allowed = ROLE_SCREENS[p.role];
+    const allowed = screensForRoles(p.roles);
     setScreen(saved && allowed.includes(saved) ? saved : allowed[0]);
     setAuthLoading(false);
   }
@@ -333,11 +342,11 @@ export default function App() {
     setUsersLoading(false);
   }
 
-  // Los usuarios se crean en el servidor con la service_role key —
+  // Los usuarios se crean/editan en el servidor con la service_role key —
   // auth.signUp desde el navegador deslogueaba al admin y lo dejaba
   // logueado como el usuario recién creado.
   async function createUser() {
-    if (!newUser.name||!newUser.email||!newUser.password) return;
+    if (!newUser.name||!newUser.email||!newUser.password||!newUser.roles.length) return;
     setUserMsg("Creando usuario…");
     try {
       const { data: { session: s } } = await getDB().auth.getSession();
@@ -348,7 +357,7 @@ export default function App() {
       });
       const json = await res.json().catch(()=>({error:"Respuesta inválida del servidor"}));
       if (!res.ok) { setUserMsg(`Error: ${json.error||res.statusText}`); return; }
-      setNewUser({name:"",email:"",password:"",role:"waiter"});
+      setNewUser({name:"",email:"",password:"",roles:["waiter"]});
       setUserMsg("Usuario creado. Ya puede ingresar con esas credenciales.");
       loadUsers();
     } catch(_) {
@@ -356,10 +365,43 @@ export default function App() {
     }
   }
 
-  async function updateUserRole(id: string, role: Role) {
-    await getDB().from("profiles").update({ role }).eq("id", id);
-    setAdminUsers(prev=>prev.map(u=>u.id===id?{...u,role}:u));
-    setEditRole(null);
+  async function updateUserRoles(id: string, roles: Role[]) {
+    if (!roles.length) return;
+    await getDB().from("profiles").update({ roles, role: roles[0] }).eq("id", id);
+    setAdminUsers(prev=>prev.map(u=>u.id===id?{...u,roles}:u));
+    setEditRoles(null);
+  }
+
+  // Cambios de email/contraseña necesitan la service_role key (tocan Auth,
+  // no solo la tabla profiles) — van por el mismo endpoint que crear/borrar.
+  async function patchUser(body: {id:string;name?:string;email?:string;password?:string}) {
+    setUserMsg("Guardando…");
+    try {
+      const { data: { session: s } } = await getDB().auth.getSession();
+      const res = await fetch("/api/admin/users", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${s?.access_token||""}` },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(()=>({error:"Respuesta inválida del servidor"}));
+      if (!res.ok) { setUserMsg(`Error: ${json.error||res.statusText}`); return; }
+      setUserMsg("Cambios guardados.");
+      loadUsers();
+    } catch(_) {
+      setUserMsg("Error: sin conexión con el servidor.");
+    }
+  }
+
+  async function saveEditProfile() {
+    if (!editProfile) return;
+    await patchUser({ id: editProfile.id, name: editProfile.name, email: editProfile.email });
+    setEditProfile(null);
+  }
+
+  async function saveResetPw() {
+    if (!resetPwFor || resetPwFor.password.length < 6) return;
+    await patchUser({ id: resetPwFor.id, password: resetPwFor.password });
+    setResetPwFor(null);
   }
 
   function removeUserProfile(id: string) {
@@ -568,7 +610,7 @@ export default function App() {
       // Si las tablas de fase 3/4 no existen aún, estas queries devuelven null y se ignoran
       getDB().from("expenses").select("amount,category").gte("expense_date",start.slice(0,10)).lt("expense_date",end.slice(0,10)),
       getDB().from("fixed_expenses").select("amount").eq("active",true),
-      getDB().from("waste").select("quantity,unit_price").gte("created_at",start).lt("created_at",end),
+      getDB().from("waste").select("quantity,unit_price,reason").gte("created_at",start).lt("created_at",end),
       getDB().from("orders").select("total").eq("status","pagado").gte("created_at",prevStart).lt("created_at",start),
       getDB().from("products").select("id,category"),
     ]);
@@ -576,7 +618,12 @@ export default function App() {
     const expensesTotal = (exRows||[]).reduce((s:number,e:{amount:number})=>s+e.amount,0);
     // Los gastos fijos son mensuales — solo entran al reporte por mes
     const fixedTotal = adminMode==="month" ? (fxRows||[]).reduce((s:number,e:{amount:number})=>s+e.amount,0) : 0;
-    const wasteTotal = (wRows||[]).reduce((s:number,w:{quantity:number;unit_price:number})=>s+w.quantity*w.unit_price,0);
+    // Consumo de personal se registra en la misma tabla de mermas pero no es
+    // una pérdida por error/daño — se separa para no mezclarlo con mermas reales
+    const wasteTotal = (wRows||[]).filter((w:{reason:string})=>w.reason!==STAFF_REASON)
+      .reduce((s:number,w:{quantity:number;unit_price:number})=>s+w.quantity*w.unit_price,0);
+    const staffTotal = (wRows||[]).filter((w:{reason:string})=>w.reason===STAFF_REASON)
+      .reduce((s:number,w:{quantity:number;unit_price:number})=>s+w.quantity*w.unit_price,0);
 
     // ¿A dónde se va la plata? — gastos agrupados por categoría
     const exCatMap: Record<string,number> = {};
@@ -647,6 +694,7 @@ export default function App() {
       expensesTotal,
       fixedTotal,
       wasteTotal,
+      staffTotal,
       prevRevenue,
       prevCount,
       categoryBreakdown,
@@ -868,6 +916,15 @@ export default function App() {
       setClosureMsg(`Cierre guardado — diferencia ${$(Math.round((counted-expected)*100)/100)}`);
     }
     setTimeout(()=>setClosureMsg(""), 6000);
+  }
+
+  // Anular un pedido ya cobrado (ej. pruebas cobradas por error) — deja
+  // de contar en caja y reportes porque esos solo suman status "pagado".
+  function annulOrder(id: string) {
+    askConfirm("¿Anular este pedido? Dejará de contar en la caja y los reportes.", async () => {
+      await getDB().from("orders").update({status:"cancelado"}).eq("id",id);
+      loadHistory();
+    });
   }
 
   // ── Fase 4: historial de pedidos con hora de cobro ──────────────
@@ -1140,7 +1197,7 @@ export default function App() {
     if (search.trim()) return p.name.toLowerCase().includes(search.toLowerCase());
     return p.category===cat;
   });
-  const screens = profile ? ROLE_SCREENS[profile.role] : [];
+  const screens = profile ? screensForRoles(profile.roles) : [];
 
   // ── Shared component styles ─────────────────────────────────────
   const card = { background:CARD, borderRadius:16, boxShadow:`0 1px 0 ${BORDER}, 0 4px 20px rgba(23,18,15,0.06)`, border:`1px solid ${BORDER}` };
@@ -1369,7 +1426,7 @@ export default function App() {
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <div style={{textAlign:"right" as const}}>
             <div style={{fontSize:13,fontWeight:800,color:"#fff"}}>{profile.name}</div>
-            <div style={{fontSize:11,fontWeight:600,color:"rgba(255,255,255,0.4)",textTransform:"uppercase" as const,letterSpacing:"0.06em"}}>{SL[profile.role]||profile.role}</div>
+            <div style={{fontSize:11,fontWeight:600,color:"rgba(255,255,255,0.4)",textTransform:"uppercase" as const,letterSpacing:"0.06em"}}>{profile.roles.map(r=>SL[r]||r).join(" · ")}</div>
           </div>
           <button onClick={logout} style={{background:"rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.7)",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:700,border:"1px solid rgba(255,255,255,0.12)",cursor:"pointer",fontFamily:FONT}}>
             Salir
@@ -2094,7 +2151,8 @@ export default function App() {
                 const gastos = adminStats?.expensesTotal||0;
                 const fijos = adminStats?.fixedTotal||0;
                 const mermas = adminStats?.wasteTotal||0;
-                const utilidad = ingresos - gastos - fijos - mermas;
+                const consumoPersonal = adminStats?.staffTotal||0;
+                const utilidad = ingresos - gastos - fijos - mermas - consumoPersonal;
                 return (
                   <div style={{...card,padding:16,marginBottom:20}}>
                     <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:12}}>
@@ -2105,6 +2163,7 @@ export default function App() {
                       {l:"Gastos del período",v:gastos,c:ALERT_RED,sign:"−"},
                       ...(adminMode==="month"?[{l:"Gastos fijos mensuales",v:fijos,c:ALERT_RED,sign:"−"}]:[]),
                       {l:"Mermas (valor de venta)",v:mermas,c:ALERT_RED,sign:"−"},
+                      {l:"Consumo de personal (valor de venta)",v:consumoPersonal,c:ALERT_RED,sign:"−"},
                     ].map(({l,v,c,sign})=>(
                       <div key={l} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${BORDER}44`}}>
                         <span style={{fontSize:13,fontWeight:600,color:MUTED}}>{l}</span>
@@ -2126,6 +2185,7 @@ export default function App() {
                 const rows = [...(adminStats?.expenseBreakdown||[])];
                 if (adminMode==="month" && (adminStats?.fixedTotal||0)>0) rows.push({name:"Gastos fijos (mensual)",amount:adminStats!.fixedTotal});
                 if ((adminStats?.wasteTotal||0)>0) rows.push({name:"Mermas",amount:adminStats!.wasteTotal});
+                if ((adminStats?.staffTotal||0)>0) rows.push({name:"Consumo de personal",amount:adminStats!.staffTotal});
                 rows.sort((a,b)=>b.amount-a.amount);
                 const total = rows.reduce((s,r)=>s+r.amount,0);
                 return (
@@ -2691,6 +2751,12 @@ export default function App() {
                             ))}
                             {(o.order_items||[]).length===0 && <p style={{fontSize:12,color:MUTED,fontWeight:600}}>Sin detalle de items</p>}
                             {o.table_note && <p style={{fontSize:12,fontWeight:700,color:DARK,marginTop:4}}>Nota de mesa: {o.table_note}</p>}
+                            {o.status==="pagado" && (
+                              <button onClick={()=>annulOrder(o.id)}
+                                style={{...btn("rgba(122,30,58,0.1)",RED),marginTop:8,height:38,padding:"0 14px",fontSize:13,alignSelf:"flex-start" as const}}>
+                                Anular pedido
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
@@ -2833,7 +2899,9 @@ export default function App() {
 
           {adminSection==="waste" && (() => {
             const totalQty = wasteList.reduce((s,w)=>s+w.quantity,0);
-            const totalValue = wasteList.reduce((s,w)=>s+w.quantity*w.unit_price,0);
+            const mermaValue = wasteList.filter(w=>w.reason!==STAFF_REASON).reduce((s,w)=>s+w.quantity*w.unit_price,0);
+            const staffValue = wasteList.filter(w=>w.reason===STAFF_REASON).reduce((s,w)=>s+w.quantity*w.unit_price,0);
+            const totalValue = mermaValue + staffValue;
             const byReason: Record<string,number> = {};
             wasteList.forEach(w=>{ byReason[w.reason]=(byReason[w.reason]||0)+w.quantity; });
             const topReason = Object.entries(byReason).sort((a,b)=>b[1]-a[1])[0];
@@ -2862,8 +2930,10 @@ export default function App() {
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:16}}>
                   {[
                     {v:String(totalQty),l:"Unidades de baja",bg:DARK,fg:"#fff"},
-                    {v:$(totalValue),l:"Valor perdido (precio venta)",bg:ALERT_RED,fg:"#fff"},
-                    {v:topReason?`${topReason[0]}`:"—",l:"Motivo más común",bg:GOLD,fg:DARK},
+                    {v:$(mermaValue),l:"Mermas (precio venta)",bg:ALERT_RED,fg:"#fff"},
+                    {v:$(staffValue),l:"Consumo de personal",bg:GOLD,fg:DARK},
+                    {v:$(totalValue),l:"Total (precio venta)",bg:DARK,fg:"#fff"},
+                    {v:topReason?`${topReason[0]}`:"—",l:"Motivo más común",bg:CREAM2,fg:DARK},
                   ].map(({v,l,bg,fg})=>(
                     <div key={l} style={{background:bg,borderRadius:14,padding:"16px"}}>
                       <p style={{fontSize:"clamp(16px,3vw,24px)",fontWeight:900,color:fg,lineHeight:1.1,marginBottom:4}}>{v}</p>
@@ -2925,6 +2995,23 @@ export default function App() {
             const roleLabels: Record<Role,string> = { waiter:"Mesero", kitchen:"Cocina", cashier:"Caja", admin:"Admin" };
             const roleBg: Record<Role,string> = { waiter:DARK, kitchen:GOLD, cashier:GREEN, admin:RED };
             const roleFg: Record<Role,string> = { waiter:"#fff", kitchen:DARK, cashier:"#fff", admin:"#fff" };
+            const chipInput = { padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none" };
+            const toggleRole = (roles: Role[], r: Role): Role[] =>
+              roles.includes(r) ? roles.filter(x=>x!==r) : [...roles, r];
+            const renderRoleChips = (roles: Role[], onToggle: (r:Role)=>void) => (
+              <div style={{display:"flex",gap:6,flexWrap:"wrap" as const}}>
+                {ROLE_ORDER.map(r=>{
+                  const on = roles.includes(r);
+                  return (
+                    <button key={r} type="button" onClick={()=>onToggle(r)}
+                      style={{padding:"6px 12px",borderRadius:999,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1.5px solid ${on?roleBg[r]:BORDER}`,cursor:"pointer",
+                        background:on?roleBg[r]:"#fff",color:on?roleFg[r]:MUTED}}>
+                      {roleLabels[r]}
+                    </button>
+                  );
+                })}
+              </div>
+            );
             return (
               <div className="admin-2col">
                 {/* Crear usuario */}
@@ -2932,19 +3019,16 @@ export default function App() {
                 <div style={{...card,padding:20,marginBottom:20}}>
                   <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar nuevo usuario</p>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:10}}>
-                    <input placeholder="Nombre completo" value={newUser.name} onChange={e=>setNewUser(u=>({...u,name:e.target.value}))}
-                      style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
-                    <input placeholder="Email" type="email" value={newUser.email} onChange={e=>setNewUser(u=>({...u,email:e.target.value}))}
-                      style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
-                    <input placeholder="Contraseña inicial" type="password" value={newUser.password} onChange={e=>setNewUser(u=>({...u,password:e.target.value}))}
-                      style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
-                    <select value={newUser.role} onChange={e=>setNewUser(u=>({...u,role:e.target.value as Role}))}
-                      style={{padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}>
-                      {(["waiter","kitchen","cashier","admin"] as Role[]).map(r=><option key={r} value={r}>{roleLabels[r]}</option>)}
-                    </select>
+                    <input placeholder="Nombre completo" value={newUser.name} onChange={e=>setNewUser(u=>({...u,name:e.target.value}))} style={chipInput}/>
+                    <input placeholder="Email" type="email" value={newUser.email} onChange={e=>setNewUser(u=>({...u,email:e.target.value}))} style={chipInput}/>
+                    <input placeholder="Contraseña inicial" type="password" value={newUser.password} onChange={e=>setNewUser(u=>({...u,password:e.target.value}))} style={chipInput}/>
                   </div>
-                  <button onClick={createUser} disabled={!newUser.name||!newUser.email||!newUser.password}
-                    style={{...btn(RED,"#fff",!newUser.name||!newUser.email||!newUser.password),width:"100%",height:48}}>
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,marginBottom:8}}>Roles</p>
+                  <div style={{marginBottom:14}}>
+                    {renderRoleChips(newUser.roles, r=>setNewUser(u=>({...u,roles:toggleRole(u.roles,r)})))}
+                  </div>
+                  <button onClick={createUser} disabled={!newUser.name||!newUser.email||!newUser.password||!newUser.roles.length}
+                    style={{...btn(RED,"#fff",!newUser.name||!newUser.email||!newUser.password||!newUser.roles.length),width:"100%",height:48}}>
                     Crear usuario
                   </button>
                   {userMsg && (
@@ -2967,36 +3051,64 @@ export default function App() {
                     <p style={{fontSize:13,color:MUTED,fontWeight:600,padding:"8px 0"}}>No hay usuarios aún</p>
                   )}
                   {adminUsers.map(u=>(
-                    <div key={u.id} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 0",borderBottom:`1px solid ${BORDER}`,flexWrap:"wrap" as const}}>
-                      <div style={{width:40,height:40,borderRadius:"50%",background:roleBg[u.role],display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                        <span style={{fontSize:15,fontWeight:900,color:roleFg[u.role]}}>{u.name.charAt(0).toUpperCase()}</span>
-                      </div>
-                      <div style={{flex:"1 1 150px",minWidth:0}}>
-                        <p style={{fontSize:14,fontWeight:700,color:DARK,marginBottom:2}}>{u.name}</p>
-                        <p style={{fontSize:12,color:MUTED,fontWeight:600,wordBreak:"break-word" as const}}>{u.email||"—"}</p>
-                      </div>
-                      {editRole?.id===u.id ? (
-                        <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                          <select value={editRole.role} onChange={e=>setEditRole({id:u.id,role:e.target.value as Role})}
-                            style={{padding:"6px 10px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}>
-                            {(["waiter","kitchen","cashier","admin"] as Role[]).map(r=><option key={r} value={r}>{roleLabels[r]}</option>)}
-                          </select>
-                          <button onClick={()=>updateUserRole(u.id,editRole.role)}
-                            style={{...btn(GREEN,"#fff"),height:34,padding:"0 12px",fontSize:13,minHeight:34}}>OK</button>
-                          <button onClick={()=>setEditRole(null)}
-                            style={{...btn(CREAM2,DARK),height:34,padding:"0 12px",fontSize:13,minHeight:34}}>×</button>
+                    <div key={u.id} style={{padding:"12px 0",borderBottom:`1px solid ${BORDER}`}}>
+                      <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" as const}}>
+                        <div style={{width:40,height:40,borderRadius:"50%",background:roleBg[u.roles[0]||"waiter"],display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                          <span style={{fontSize:15,fontWeight:900,color:roleFg[u.roles[0]||"waiter"]}}>{u.name.charAt(0).toUpperCase()}</span>
                         </div>
-                      ) : (
-                        <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                          <span style={{background:roleBg[u.role],color:roleFg[u.role],padding:"4px 10px",borderRadius:999,fontSize:11,fontWeight:700,letterSpacing:"0.05em"}}>{roleLabels[u.role]}</span>
-                          {u.id!==profile?.id && (
-                            <>
-                              <button onClick={()=>setEditRole({id:u.id,role:u.role})}
-                                style={{...btn(CREAM2,DARK),height:32,padding:"0 10px",fontSize:12,minHeight:32}}>Rol</button>
-                              <button onClick={()=>removeUserProfile(u.id)}
-                                style={{...btn("rgba(122,30,58,0.1)",RED),height:32,padding:"0 10px",fontSize:12,minHeight:32}}>Quitar</button>
-                            </>
-                          )}
+                        <div style={{flex:"1 1 150px",minWidth:0}}>
+                          <p style={{fontSize:14,fontWeight:700,color:DARK,marginBottom:2}}>{u.name}</p>
+                          <p style={{fontSize:12,color:MUTED,fontWeight:600,wordBreak:"break-word" as const}}>{u.email||"—"}</p>
+                        </div>
+                        {editRoles?.id===u.id ? (
+                          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap" as const}}>
+                            {renderRoleChips(editRoles.roles, r=>setEditRoles({id:u.id,roles:toggleRole(editRoles.roles,r)}))}
+                            <button onClick={()=>updateUserRoles(u.id,editRoles.roles)} disabled={!editRoles.roles.length}
+                              style={{...btn(GREEN,"#fff",!editRoles.roles.length),height:34,padding:"0 12px",fontSize:13,minHeight:34}}>OK</button>
+                            <button onClick={()=>setEditRoles(null)}
+                              style={{...btn(CREAM2,DARK),height:34,padding:"0 12px",fontSize:13,minHeight:34}}>×</button>
+                          </div>
+                        ) : (
+                          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap" as const}}>
+                            {u.roles.map(r=>(
+                              <span key={r} style={{background:roleBg[r],color:roleFg[r],padding:"4px 10px",borderRadius:999,fontSize:11,fontWeight:700,letterSpacing:"0.05em"}}>{roleLabels[r]}</span>
+                            ))}
+                            {u.id!==profile?.id && (
+                              <>
+                                <button onClick={()=>setEditRoles({id:u.id,roles:u.roles})}
+                                  style={{...btn(CREAM2,DARK),height:32,padding:"0 10px",fontSize:12,minHeight:32}}>Rol</button>
+                                <button onClick={()=>setEditProfile({id:u.id,name:u.name,email:u.email||""})}
+                                  style={{...btn(CREAM2,DARK),height:32,padding:"0 10px",fontSize:12,minHeight:32}}>Editar</button>
+                                <button onClick={()=>setResetPwFor({id:u.id,password:""})}
+                                  style={{...btn(CREAM2,DARK),height:32,padding:"0 10px",fontSize:12,minHeight:32}}>Reset pass</button>
+                                <button onClick={()=>removeUserProfile(u.id)}
+                                  style={{...btn("rgba(122,30,58,0.1)",RED),height:32,padding:"0 10px",fontSize:12,minHeight:32}}>Quitar</button>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      {editProfile?.id===u.id && (
+                        <div style={{display:"flex",gap:6,flexWrap:"wrap" as const,marginTop:10}}>
+                          <input placeholder="Nombre" value={editProfile.name} onChange={e=>setEditProfile({...editProfile,name:e.target.value})}
+                            style={{...chipInput,padding:"8px 12px",fontSize:13,flex:"1 1 150px"}}/>
+                          <input placeholder="Email" type="email" value={editProfile.email} onChange={e=>setEditProfile({...editProfile,email:e.target.value})}
+                            style={{...chipInput,padding:"8px 12px",fontSize:13,flex:"1 1 150px"}}/>
+                          <button onClick={saveEditProfile} disabled={!editProfile.name||!editProfile.email}
+                            style={{...btn(GREEN,"#fff",!editProfile.name||!editProfile.email),height:36,padding:"0 12px",fontSize:13,minHeight:36}}>OK</button>
+                          <button onClick={()=>setEditProfile(null)}
+                            style={{...btn(CREAM2,DARK),height:36,padding:"0 12px",fontSize:13,minHeight:36}}>×</button>
+                        </div>
+                      )}
+                      {resetPwFor?.id===u.id && (
+                        <div style={{display:"flex",gap:6,flexWrap:"wrap" as const,marginTop:10}}>
+                          <input placeholder="Nueva contraseña (mín. 6 caracteres)" type="password" value={resetPwFor.password}
+                            onChange={e=>setResetPwFor({...resetPwFor,password:e.target.value})}
+                            style={{...chipInput,padding:"8px 12px",fontSize:13,flex:"1 1 220px"}}/>
+                          <button onClick={saveResetPw} disabled={resetPwFor.password.length<6}
+                            style={{...btn(GREEN,"#fff",resetPwFor.password.length<6),height:36,padding:"0 12px",fontSize:13,minHeight:36}}>OK</button>
+                          <button onClick={()=>setResetPwFor(null)}
+                            style={{...btn(CREAM2,DARK),height:36,padding:"0 12px",fontSize:13,minHeight:36}}>×</button>
                         </div>
                       )}
                     </div>
