@@ -160,10 +160,10 @@ export default function App() {
   const [notesBycat, setNotesByCat] = useState<Record<string,{id:string;note:string}[]>>({});
   const [newNote, setNewNote] = useState({category:CAT_ORDER[0],note:""});
   const [adminMode, setAdminMode] = useState<"day"|"week"|"month"|"custom">("day");
-  const [adminDate, setAdminDate] = useState(()=>new Date().toISOString().slice(0,10));
-  const [adminMonth, setAdminMonth] = useState(()=>new Date().toISOString().slice(0,7));
-  const [customStart, setCustomStart] = useState(()=>new Date().toISOString().slice(0,10));
-  const [customEnd, setCustomEnd] = useState(()=>new Date().toISOString().slice(0,10));
+  const [adminDate, setAdminDate] = useState(()=>localDateStr());
+  const [adminMonth, setAdminMonth] = useState(()=>localDateStr().slice(0,7));
+  const [customStart, setCustomStart] = useState(()=>localDateStr());
+  const [customEnd, setCustomEnd] = useState(()=>localDateStr());
   const [adminLoading, setAdminLoading] = useState(false);
   const [newProd, setNewProd] = useState({name:"",category:CAT_ORDER[0],price:"",description:""});
   const [editProd, setEditProd] = useState<{id:string,name:string,category:string,price:string,description:string}|null>(null);
@@ -196,7 +196,7 @@ export default function App() {
   // Fase 4: gastos, gastos fijos e historial de pedidos
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [fixedExpenses, setFixedExpenses] = useState<FixedExpense[]>([]);
-  const [newExpense, setNewExpense] = useState({category:EXPENSE_CATS[0],description:"",amount:"",expense_date:new Date().toISOString().slice(0,10)});
+  const [newExpense, setNewExpense] = useState({category:EXPENSE_CATS[0],description:"",amount:"",expense_date:localDateStr()});
   const [newFixed, setNewFixed] = useState({name:"",category:"Alquiler",amount:""});
   const [expenseMsg, setExpenseMsg] = useState("");
   const [histOrders, setHistOrders] = useState<Order[]>([]);
