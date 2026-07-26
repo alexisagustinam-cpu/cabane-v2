@@ -201,8 +201,10 @@ export default function App() {
   const [expenseMsg, setExpenseMsg] = useState("");
   const [histOrders, setHistOrders] = useState<Order[]>([]);
   const [histPayments, setHistPayments] = useState<Record<string,Payment[]>>({});
-  const [histStatus, setHistStatus] = useState<"pagado"|"cancelado">("pagado");
+  const [histStatus, setHistStatus] = useState<"pagado"|"cancelado"|"abiertos">("pagado");
   const [histExpanded, setHistExpanded] = useState<string|null>(null);
+  const [histSelected, setHistSelected] = useState<Set<string>>(new Set());
+  const [histMsg, setHistMsg] = useState("");
   // Fase 5: mesas/categorías dinámicas, cierre de caja, indicador de conexión
   const [mesasList, setMesasList] = useState<string[]>(MESAS);
   const [catList, setCatList] = useState<string[]>(CAT_ORDER);
@@ -928,10 +930,13 @@ export default function App() {
   }
 
   // ── Fase 4: historial de pedidos con hora de cobro ──────────────
+  // Trae TODOS los estados (no solo pagado/cancelado) para poder ver y
+  // limpiar también pedidos de prueba que quedaron abiertos.
   async function loadHistory() {
     const { start, end } = adminRange();
-    const { data: orders } = await getDB().from("orders").select("*, order_items(*)").in("status",["pagado","cancelado"]).gte("created_at",start).lt("created_at",end).order("created_at",{ascending:false});
+    const { data: orders } = await getDB().from("orders").select("*, order_items(*)").gte("created_at",start).lt("created_at",end).order("created_at",{ascending:false});
     setHistOrders(orders||[]);
+    setHistSelected(new Set());
     const ids = (orders||[]).filter((o:Order)=>o.status==="pagado").map((o:Order)=>o.id);
     const map: Record<string,Payment[]> = {};
     if (ids.length) {
@@ -939,6 +944,35 @@ export default function App() {
       (pays||[]).forEach((p:Payment) => { (map[p.order_id] = map[p.order_id]||[]).push(p); });
     }
     setHistPayments(map);
+  }
+
+  // Borrado permanente (ej. pruebas del sistema) — a diferencia de "Anular",
+  // no queda ni rastro en el historial. Pasa por el servidor porque no hay
+  // política RLS de delete en orders/order_items/payments.
+  function deleteOrdersForever(ids: string[]) {
+    if (!ids.length) return;
+    askConfirm(`¿Eliminar PERMANENTEMENTE ${ids.length} pedido${ids.length>1?"s":""}? No se puede deshacer y no queda ningún registro.`, async () => {
+      setHistMsg("Eliminando…");
+      try {
+        const { data: { session: s } } = await getDB().auth.getSession();
+        const res = await fetch("/api/admin/orders", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${s?.access_token||""}` },
+          body: JSON.stringify({ ids }),
+        });
+        const json = await res.json().catch(()=>({error:"Respuesta inválida del servidor"}));
+        if (!res.ok) { setHistMsg(`Error: ${json.error||res.statusText}`); return; }
+        setHistOrders(prev=>prev.filter(o=>!ids.includes(o.id)));
+        setHistSelected(prev=>{ const n=new Set(prev); ids.forEach(id=>n.delete(id)); return n; });
+        setHistMsg(`${json.deleted} pedido${json.deleted>1?"s":""} eliminado${json.deleted>1?"s":""}.`);
+      } catch(_) {
+        setHistMsg("Error: sin conexión con el servidor.");
+      }
+    });
+  }
+
+  function toggleHistSelected(id: string) {
+    setHistSelected(prev => { const n=new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   }
 
   async function loadAdminProducts() {
@@ -2692,13 +2726,27 @@ export default function App() {
           })()}
 
           {adminSection==="history" && (() => {
-            const shown = histOrders.filter(o=>o.status===histStatus);
+            const OPEN_STATUSES = ["enviado","preparando","listo"];
+            const shown = histStatus==="abiertos"
+              ? histOrders.filter(o=>OPEN_STATUSES.includes(o.status))
+              : histOrders.filter(o=>o.status===histStatus);
             const totalPeriod = histOrders.filter(o=>o.status==="pagado").reduce((s,o)=>s+o.total,0);
             const methodLabel: Record<string,string> = { efectivo:"Efectivo", tarjeta:"Tarjeta", transferencia:"Transferencia" };
+            const statusLabel: Record<string,string> = { pagado:"Pagado", cancelado:"Cancelado", enviado:"Nuevo", preparando:"En prep.", listo:"Listo" };
+            const allShownSelected = shown.length>0 && shown.every(o=>histSelected.has(o.id));
             return (
               <div>
                 {/* Selector período */}
                 {renderPeriodPicker(loadHistory)}
+
+                {histMsg && (
+                  <div style={{marginBottom:14,borderRadius:12,padding:"12px 16px",fontSize:14,fontWeight:700,
+                    background:histMsg.startsWith("Error")?"#FFEBEE":"rgba(47,125,50,0.1)",
+                    border:`1.5px solid ${histMsg.startsWith("Error")?ALERT_RED:GREEN}`,
+                    color:histMsg.startsWith("Error")?ALERT_RED:GREEN}}>
+                    {histMsg}
+                  </div>
+                )}
 
                 {/* Resumen + filtro estado */}
                 <div style={{display:"flex",gap:10,flexWrap:"wrap" as const,alignItems:"center",marginBottom:16}}>
@@ -2706,23 +2754,47 @@ export default function App() {
                     <p style={{fontSize:20,fontWeight:900,color:GOLD,lineHeight:1}}>{$(totalPeriod)}</p>
                     <p style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase" as const,letterSpacing:"0.08em",marginTop:3}}>{histOrders.filter(o=>o.status==="pagado").length} cobrados</p>
                   </div>
-                  <div style={{display:"flex",gap:6,marginLeft:"auto"}}>
-                    {(["pagado","cancelado"] as const).map(s=>(
+                  <div style={{display:"flex",gap:6,marginLeft:"auto",flexWrap:"wrap" as const}}>
+                    {(["pagado","cancelado","abiertos"] as const).map(s=>(
                       <button key={s} onClick={()=>setHistStatus(s)} style={{...btn(histStatus===s?RED:CREAM2,histStatus===s?"#fff":DARK),height:36,padding:"0 14px",fontSize:12,minHeight:36}}>
-                        {s==="pagado"?"Pagados":"Cancelados"} ({histOrders.filter(o=>o.status===s).length})
+                        {s==="pagado"?"Pagados":s==="cancelado"?"Cancelados":"Abiertos"} ({s==="abiertos"?histOrders.filter(o=>OPEN_STATUSES.includes(o.status)).length:histOrders.filter(o=>o.status===s).length})
                       </button>
                     ))}
                   </div>
                 </div>
 
+                {/* Selección múltiple para borrado permanente */}
+                {shown.length>0 && (
+                  <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap" as const}}>
+                    <label style={{display:"flex",alignItems:"center",gap:6,fontSize:13,fontWeight:700,color:MUTED,cursor:"pointer"}}>
+                      <input type="checkbox" checked={allShownSelected}
+                        onChange={()=>setHistSelected(prev=>{
+                          if (allShownSelected) { const n=new Set(prev); shown.forEach(o=>n.delete(o.id)); return n; }
+                          const n=new Set(prev); shown.forEach(o=>n.add(o.id)); return n;
+                        })}/>
+                      Seleccionar todo ({shown.length})
+                    </label>
+                    {histSelected.size>0 && (
+                      <button onClick={()=>deleteOrdersForever([...histSelected])}
+                        style={{...btn(RED,"#fff"),height:36,padding:"0 14px",fontSize:12,minHeight:36}}>
+                        Eliminar seleccionados ({histSelected.size})
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {/* Lista */}
-                {shown.length===0 && <div style={{textAlign:"center" as const,padding:"40px 20px"}}><p style={{fontWeight:800,fontSize:17,color:MUTED}}>Sin pedidos {histStatus==="pagado"?"cobrados":"cancelados"} en este período</p></div>}
+                {shown.length===0 && <div style={{textAlign:"center" as const,padding:"40px 20px"}}><p style={{fontWeight:800,fontSize:17,color:MUTED}}>Sin pedidos {histStatus==="pagado"?"cobrados":histStatus==="cancelado"?"cancelados":"abiertos"} en este período</p></div>}
                 <div style={{display:"flex",flexDirection:"column" as const,gap:8}}>
                   {shown.map(o=>{
                     const pays = histPayments[o.id]||[];
                     const open = histExpanded===o.id;
                     return (
-                      <div key={o.id} style={{...card,padding:0,overflow:"hidden"}}>
+                      <div key={o.id} style={{...card,padding:0,overflow:"hidden",display:"flex",alignItems:"stretch"}}>
+                        <label style={{display:"flex",alignItems:"center",padding:"0 0 0 14px",cursor:"pointer"}} onClick={e=>e.stopPropagation()}>
+                          <input type="checkbox" checked={histSelected.has(o.id)} onChange={()=>toggleHistSelected(o.id)}/>
+                        </label>
+                        <div style={{flex:1,minWidth:0}}>
                         <button onClick={()=>setHistExpanded(open?null:o.id)} style={{width:"100%",background:"transparent",border:"none",cursor:"pointer",fontFamily:FONT,textAlign:"left" as const,
                           display:"flex",alignItems:"center",gap:12,padding:"12px 16px",flexWrap:"wrap" as const}}>
                           <div style={{flex:1,minWidth:160}}>
@@ -2739,7 +2811,7 @@ export default function App() {
                               </p>
                             )}
                           </div>
-                          <span style={badge(o.status)}>{o.status==="pagado"?"Pagado":"Cancelado"}</span>
+                          <span style={badge(o.status)}>{statusLabel[o.status]||o.status}</span>
                           <span style={{fontSize:16,fontWeight:900,color:o.status==="pagado"?GREEN:MUTED}}>{$(o.total)}</span>
                           <span style={{fontSize:12,color:MUTED,fontWeight:700}}>{open?"▲":"▼"}</span>
                         </button>
@@ -2756,14 +2828,21 @@ export default function App() {
                             ))}
                             {(o.order_items||[]).length===0 && <p style={{fontSize:12,color:MUTED,fontWeight:600}}>Sin detalle de items</p>}
                             {o.table_note && <p style={{fontSize:12,fontWeight:700,color:DARK,marginTop:4}}>Nota de mesa: {o.table_note}</p>}
-                            {o.status==="pagado" && (
-                              <button onClick={()=>annulOrder(o.id)}
-                                style={{...btn("rgba(122,30,58,0.1)",RED),marginTop:8,height:38,padding:"0 14px",fontSize:13,alignSelf:"flex-start" as const}}>
-                                Anular pedido
+                            <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap" as const}}>
+                              {o.status==="pagado" && (
+                                <button onClick={()=>annulOrder(o.id)}
+                                  style={{...btn("rgba(122,30,58,0.1)",RED),height:38,padding:"0 14px",fontSize:13}}>
+                                  Anular pedido
+                                </button>
+                              )}
+                              <button onClick={()=>deleteOrdersForever([o.id])}
+                                style={{...btn(RED,"#fff"),height:38,padding:"0 14px",fontSize:13}}>
+                                Eliminar definitivamente
                               </button>
-                            )}
+                            </div>
                           </div>
                         )}
+                        </div>
                       </div>
                     );
                   })}
