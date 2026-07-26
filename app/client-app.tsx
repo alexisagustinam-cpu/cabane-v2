@@ -185,7 +185,7 @@ export default function App() {
   const [wOrders, setWOrders] = useState<Order[]>([]);
   const [customerName, setCustomerName] = useState("");
   const [cashierMesa, setCashierMesa] = useState<string|null>(null);
-  const [mesaPayModal, setMesaPayModal] = useState<{mesa:string;orders:Order[]}|null>(null);
+  const [payModalMesa, setPayModalMesa] = useState<string|null>(null);
   const [moveOrder, setMoveOrder] = useState<Order|null>(null);
   // Fase 3: mermas (productos dados de baja)
   const [wasteList, setWasteList] = useState<Waste[]>([]);
@@ -1194,12 +1194,29 @@ export default function App() {
 
   // Cobra todos los pedidos abiertos de una mesa, uno por uno
   async function payWholeMesa(orders: Order[], method: string) {
-    setMesaPayModal(null);
+    setPayModalMesa(null);
     for (const o of orders) {
       await payOrder(o.id, [{method, amount:o.total}]);
     }
     setCashierMesa(null);
   }
+
+  // Tocar una mesa en el mapa abre el popup de cobro (igual que "Confirmar
+  // pedido" del mesero) en vez de expandir la lista abajo en la página.
+  function openMesaModal(m: string) {
+    if (!mesaOrdersOf(cOrders, m).length) return;
+    setCashierMesa(m);
+    setPayModalMesa(m);
+  }
+
+  // Si se cobran/mueven todos los pedidos de la mesa abierta, el popup se
+  // cierra solo — no tiene sentido dejarlo abierto mostrando "sin pedidos".
+  useEffect(() => {
+    if (payModalMesa && !mesaOrdersOf(cOrders, payModalMesa).length) {
+      setPayModalMesa(null);
+      setCashierMesa(null);
+    }
+  }, [cOrders, payModalMesa]);
 
   // Mueve un pedido a otra mesa (RPC move_order; fallback directo si el SQL de fase 2 no se corrió)
   async function doMoveOrder(order: Order, target: string) {
@@ -1959,40 +1976,11 @@ export default function App() {
                 );
               })()}
 
-              {/* Mapa de mesas — toca una para ver y cobrar sus pedidos */}
+              {/* Mapa de mesas — toca una para abrir el pedido y cobrar */}
               <div style={{marginBottom:16}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:10,flexWrap:"wrap" as const}}>
-                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em"}}>Mesas</p>
-                  {cashierMesa && (
-                    <button onClick={()=>setCashierMesa(null)} style={{padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,
-                      background:CREAM2,color:DARK,border:"none",cursor:"pointer"}}>
-                      Ver todas ✕
-                    </button>
-                  )}
-                </div>
-                {renderMesaMap(cOrders, (m)=>setCashierMesa(prev=>prev===m?null:m), cashierMesa)}
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:10}}>Mesas</p>
+                {renderMesaMap(cOrders, openMesaModal, cashierMesa)}
               </div>
-
-              {/* Cobrar mesa completa */}
-              {(()=>{
-                if (!cashierMesa) return null;
-                const mo = mesaOrdersOf(cOrders, cashierMesa);
-                if (mo.length===0) return null;
-                const allListo = mo.every(o=>o.status==="listo");
-                const total = mo.reduce((s,o)=>s+o.total,0);
-                return (
-                  <div style={{...card,padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" as const}}>
-                    <div style={{flex:1,minWidth:160}}>
-                      <p style={{fontSize:15,fontWeight:900,color:DARK}}>{cashierMesa} · {mo.length} pedido{mo.length>1?"s":""}</p>
-                      <p style={{fontSize:13,fontWeight:700,color:MUTED}}>Total pendiente: <span style={{color:RED,fontWeight:900}}>{$(total)}</span></p>
-                    </div>
-                    <button disabled={!allListo} onClick={()=>setMesaPayModal({mesa:cashierMesa,orders:mo})}
-                      style={{...btn(GREEN,"#fff",!allListo),height:48,padding:"0 18px",fontSize:14}}>
-                      {allListo ? `Cobrar mesa completa · ${$(total)}` : "Esperando que todo esté listo"}
-                    </button>
-                  </div>
-                );
-              })()}
 
               {(()=>{
                 const overdue=cOrders.filter(o=>o.status==="listo"&&(Date.now()-new Date(o.created_at).getTime())>20*60*1000);
@@ -2011,76 +1999,30 @@ export default function App() {
                 ):null;
               })()}
 
-              {cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado"&&(!cashierMesa||o.table_label===cashierMesa)).length===0&&!cLoading ? (
+              {cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado").length===0&&!cLoading ? (
                 <div style={{textAlign:"center" as const,padding:"60px 20px"}}>
-                  <p style={{fontWeight:800,fontSize:20,color:MUTED}}>{cashierMesa?`Sin pedidos pendientes en ${cashierMesa}`:"Sin pedidos pendientes"}</p>
+                  <p style={{fontWeight:800,fontSize:20,color:MUTED}}>Sin pedidos pendientes</p>
                 </div>
               ) : (
                 <div style={{display:"flex",flexDirection:"column",gap:12}}>
-                  {cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado"&&(!cashierMesa||o.table_label===cashierMesa)).map(o=>{
-                    const canPay=o.status==="listo", busy=paying===o.id;
+                  {cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado").map(o=>{
                     const time=new Date(o.created_at).toLocaleTimeString("es-EC",{hour:"2-digit",minute:"2-digit"});
                     return (
-                      <div key={o.id} style={{...card,padding:16,border:canPay?`2px solid ${GREEN}`:`1px solid ${BORDER}`}}>
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
-                          <div>
-                            <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:4}}>#{o.order_number} · {time}</p>
-                            <p style={{fontSize:22,fontWeight:900,color:DARK,marginBottom:2}}>{o.table_label}</p>
-                            {o.customer_name && <p style={{fontSize:13,fontWeight:800,color:GOLD,marginBottom:4}}>👤 {o.customer_name}</p>}
-                            <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Preparando":"Listo para cobrar"}</span>
-                          </div>
-                      <div style={{display:"flex",flexDirection:"column" as const,alignItems:"flex-end",gap:8}}>
+                      <button key={o.id} onClick={()=>openMesaModal(o.table_label)} style={{...card,padding:16,border:o.status==="listo"?`2px solid ${GREEN}`:`1px solid ${BORDER}`,
+                        display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap" as const,width:"100%",textAlign:"left" as const,cursor:"pointer",fontFamily:FONT}}>
+                        <div>
+                          <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:4}}>#{o.order_number} · {time}</p>
+                          <p style={{fontSize:22,fontWeight:900,color:DARK,marginBottom:2}}>{o.table_label}</p>
+                          {o.customer_name && <p style={{fontSize:13,fontWeight:800,color:GOLD,marginBottom:4}}>👤 {o.customer_name}</p>}
+                          <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Preparando":"Listo para cobrar"}</span>
+                        </div>
                         <p style={{fontSize:"clamp(22px,3vw,28px)",fontWeight:900,color:RED}}>{$(o.total)}</p>
-                        <button onClick={()=>setExpandedOrder(expandedOrder===o.id?null:o.id)}
-                          style={{fontSize:12,fontWeight:700,color:MUTED,background:CREAM2,border:"none",borderRadius:8,padding:"5px 10px",cursor:"pointer",fontFamily:FONT}}>
-                          {expandedOrder===o.id?"Ocultar ▲":`Ver ${(o.order_items||[]).length} items ▼`}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Order items expandable */}
-                    {expandedOrder===o.id && (
-                      <div style={{background:CREAM,borderRadius:10,padding:"10px 12px",marginBottom:12,display:"flex",flexDirection:"column" as const,gap:6}}>
-                        {(o.order_items||[]).map(i=>(
-                          <div key={i.id} style={{borderBottom:`1px solid ${BORDER}`,paddingBottom:6,marginBottom:2}}>
-                            <div style={{display:"flex",justifyContent:"space-between",fontSize:14,fontWeight:700,color:DARK}}>
-                              <span>{i.quantity}× {i.product_name}</span>
-                              <span>{$(i.quantity*i.unit_price)}</span>
-                            </div>
-                            {i.notes && <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:2}}>Nota: {i.notes}</p>}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {!canPay && <p style={{fontSize:13,color:MUTED,fontWeight:600,marginBottom:12,background:CREAM2,borderRadius:8,padding:"8px 12px"}}>Esperando que cocina marque como Listo</p>}
-                    <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
-                      {(["efectivo","tarjeta","transferencia"] as const).map(m=>{
-                        const labels={efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia"};
-                        const bgs={efectivo:DARK,tarjeta:RED,transferencia:GOLD};
-                        const fgs={efectivo:"#fff",tarjeta:"#fff",transferencia:DARK};
-                        return (
-                          <button key={m} disabled={!canPay||busy} onClick={()=>cobrar(o.id,m,o.total)}
-                            style={{...btn(bgs[m],fgs[m],!canPay||busy),flex:1,minWidth:100,height:50,fontSize:13}}>
-                            {busy?"Guardando…":labels[m]}
-                          </button>
-                        );
-                      })}
-                      <button disabled={!canPay||busy} onClick={()=>{setSplitModal(o);setSplitAmounts({efectivo:"",tarjeta:"",transferencia:""});}}
-                        style={{...btn(CREAM2,DARK,!canPay||busy),flex:1,minWidth:100,height:50,fontSize:13,border:`1px solid ${BORDER}`}}>
-                        Dividir
                       </button>
-                      <button disabled={busy} onClick={()=>setMoveOrder(o)}
-                        style={{...btn(CREAM2,DARK,busy),minWidth:90,height:50,fontSize:13,border:`1px solid ${BORDER}`}}>
-                        Mover ⇄
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
             {/* Columna derecha sticky — resumen del día (solo desktop) */}
             <aside className="cashier-sidebar" style={{flexDirection:"column",gap:12,position:"sticky" as const,top:72}}>
@@ -3492,51 +3434,109 @@ export default function App() {
         );
       })()}
 
-      {/* ── MODAL COBRAR MESA COMPLETA ──────────────────────────── */}
-      {mesaPayModal && (()=>{
-        const total = mesaPayModal.orders.reduce((s,o)=>s+o.total,0);
+      {/* ── POPUP DE MESA (CAJA) — abre al tocar una mesa, mismo patrón
+           que "Confirmar pedido" del mesero ─────────────────────── */}
+      {payModalMesa && (()=>{
+        const orders = mesaOrdersOf(cOrders, payModalMesa);
+        if (!orders.length) return null;
+        const total = orders.reduce((s,o)=>s+o.total,0);
+        const allListo = orders.every(o=>o.status==="listo");
+        const methodLabels={efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia"};
+        const methodBg={efectivo:DARK,tarjeta:RED,transferencia:GOLD};
+        const methodFg={efectivo:"#fff",tarjeta:"#fff",transferencia:DARK};
+        const closeModal = () => { setPayModalMesa(null); setCashierMesa(null); };
         return (
-          <div onClick={e=>{if(e.target===e.currentTarget)setMesaPayModal(null)}}
+          <div onClick={e=>{if(e.target===e.currentTarget)closeModal()}}
             style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
-            <div style={{...card,padding:20,width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
+            <div style={{...card,padding:20,width:"100%",maxWidth:480,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
                 <div>
-                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Cobrar mesa completa</p>
-                  <p style={{fontSize:22,fontWeight:900,color:DARK}}>{mesaPayModal.mesa}</p>
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Caja</p>
+                  <p style={{fontSize:24,fontWeight:900,color:DARK}}>{payModalMesa}</p>
+                  <p style={{fontSize:13,fontWeight:600,color:MUTED,marginTop:2}}>{orders.length} pedido{orders.length>1?"s":""}</p>
                 </div>
-                <button onClick={()=>setMesaPayModal(null)}
+                <button onClick={closeModal}
                   style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
               </div>
 
-              <div style={{display:"flex",flexDirection:"column" as const,gap:6,marginBottom:14}}>
-                {mesaPayModal.orders.map(o=>(
-                  <div key={o.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:CREAM,borderRadius:10,padding:"10px 14px"}}>
-                    <span style={{fontSize:14,fontWeight:700,color:DARK}}>#{o.order_number}{o.customer_name?` · ${o.customer_name}`:""}</span>
-                    <span style={{fontSize:14,fontWeight:900,color:RED}}>{$(o.total)}</span>
-                  </div>
-                ))}
-              </div>
-
-              <div style={{background:DARK,borderRadius:12,padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              <div style={{background:DARK,borderRadius:12,padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
                 <span style={{fontSize:14,color:"rgba(255,255,255,0.5)",fontWeight:600}}>Total mesa</span>
                 <span style={{fontSize:24,fontWeight:900,color:GOLD}}>{$(total)}</span>
               </div>
 
-              <p style={{fontSize:13,fontWeight:600,color:MUTED,marginBottom:10}}>¿Con qué método paga todo?</p>
-              <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
-                {(["efectivo","tarjeta","transferencia"] as const).map(m=>{
-                  const labels={efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia"};
-                  const bgs={efectivo:DARK,tarjeta:RED,transferencia:GOLD};
-                  const fgs={efectivo:"#fff",tarjeta:"#fff",transferencia:DARK};
+              {/* Cobrar todo junto — solo si hay más de un pedido y todos están listos */}
+              {orders.length>1 && allListo && (
+                <div style={{marginBottom:18,paddingBottom:16,borderBottom:`1.5px dashed ${BORDER}`}}>
+                  <p style={{fontSize:13,fontWeight:700,color:DARK,marginBottom:10}}>Cobrar mesa completa — ¿con qué método?</p>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
+                    {(["efectivo","tarjeta","transferencia"] as const).map(m=>(
+                      <button key={m} onClick={()=>payWholeMesa(orders, m)}
+                        style={{...btn(methodBg[m],methodFg[m]),flex:1,minWidth:100,height:48,fontSize:13}}>
+                        {methodLabels[m]}
+                      </button>
+                    ))}
+                  </div>
+                  <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:8}}>Para dividir entre métodos, o cobrar cada uno por separado, usá los pedidos de abajo.</p>
+                </div>
+              )}
+
+              {/* Un card por pedido */}
+              <div style={{display:"flex",flexDirection:"column" as const,gap:10}}>
+                {orders.map(o=>{
+                  const canPay = o.status==="listo", busy = paying===o.id;
+                  const expanded = expandedOrder===o.id;
                   return (
-                    <button key={m} onClick={()=>payWholeMesa(mesaPayModal.orders, m)}
-                      style={{...btn(bgs[m],fgs[m]),flex:1,minWidth:110,height:52,fontSize:14}}>
-                      {labels[m]}
-                    </button>
+                    <div key={o.id} style={{background:CREAM,borderRadius:12,padding:"12px 14px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,marginBottom:8}}>
+                        <div>
+                          <p style={{fontSize:14,fontWeight:900,color:DARK}}>#{o.order_number}{o.customer_name?` · ${o.customer_name}`:""}</p>
+                          <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Preparando":"Listo para cobrar"}</span>
+                        </div>
+                        <div style={{display:"flex",flexDirection:"column" as const,alignItems:"flex-end",gap:6}}>
+                          <span style={{fontSize:16,fontWeight:900,color:RED}}>{$(o.total)}</span>
+                          <button onClick={()=>setExpandedOrder(expanded?null:o.id)}
+                            style={{fontSize:11,fontWeight:700,color:MUTED,background:"#fff",border:`1px solid ${BORDER}`,borderRadius:8,padding:"4px 8px",cursor:"pointer",fontFamily:FONT}}>
+                            {expanded?"Ocultar ▲":`${(o.order_items||[]).length} items ▼`}
+                          </button>
+                        </div>
+                      </div>
+
+                      {expanded && (
+                        <div style={{background:"#fff",borderRadius:8,padding:"8px 10px",marginBottom:10,display:"flex",flexDirection:"column" as const,gap:4}}>
+                          {(o.order_items||[]).map(i=>(
+                            <div key={i.id}>
+                              <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:700,color:DARK}}>
+                                <span>{i.quantity}× {i.product_name}</span>
+                                <span>{$(i.quantity*i.unit_price)}</span>
+                              </div>
+                              {i.notes && <p style={{fontSize:11,fontWeight:600,color:MUTED}}>Nota: {i.notes}</p>}
+                            </div>
+                          ))}
+                          {(o.order_items||[]).length===0 && <p style={{fontSize:12,color:MUTED,fontWeight:600}}>Sin detalle de items</p>}
+                        </div>
+                      )}
+
+                      {!canPay && <p style={{fontSize:12,color:MUTED,fontWeight:600,marginBottom:8,background:"#fff",borderRadius:8,padding:"6px 10px"}}>Esperando que cocina marque como Listo</p>}
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap" as const}}>
+                        {(["efectivo","tarjeta","transferencia"] as const).map(m=>(
+                          <button key={m} disabled={!canPay||busy} onClick={()=>cobrar(o.id,m,o.total)}
+                            style={{...btn(methodBg[m],methodFg[m],!canPay||busy),flex:1,minWidth:90,height:44,fontSize:12}}>
+                            {busy?"…":methodLabels[m]}
+                          </button>
+                        ))}
+                        <button disabled={!canPay||busy} onClick={()=>{setSplitModal(o);setSplitAmounts({efectivo:"",tarjeta:"",transferencia:""});}}
+                          style={{...btn(CREAM2,DARK,!canPay||busy),flex:1,minWidth:80,height:44,fontSize:12,border:`1px solid ${BORDER}`}}>
+                          Dividir
+                        </button>
+                        <button disabled={busy} onClick={()=>setMoveOrder(o)}
+                          style={{...btn(CREAM2,DARK,busy),minWidth:76,height:44,fontSize:12,border:`1px solid ${BORDER}`}}>
+                          Mover ⇄
+                        </button>
+                      </div>
+                    </div>
                   );
                 })}
               </div>
-              <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:10}}>Para dividir entre métodos, cobra cada pedido por separado con "Dividir".</p>
             </div>
           </div>
         );
