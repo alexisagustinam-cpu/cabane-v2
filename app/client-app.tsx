@@ -17,12 +17,12 @@ interface Product { id: string; name: string; category: string; price: number; d
 interface OrderItem { id: string; product_id: string; product_name: string; quantity: number; unit_price: number; notes?: string }
 interface Ingredient { id: string; name: string; unit: string; stock_current: number; stock_min: number }
 interface Recipe { id: string; product_id: string; ingredient_id: string; quantity: number }
-interface Order { id: string; order_number: number; table_label: string; status: Status; total: number; created_at: string; table_note?: string; customer_name?: string; order_items?: OrderItem[] }
+interface Order { id: string; order_number: number; table_label: string; status: Status; total: number; created_at: string; table_note?: string; customer_name?: string; order_items?: OrderItem[]; created_by?: string; creator_name?: string }
 interface CartItem extends Product { qty: number; notes: string[]; customNote: string }
 interface Waste { id: string; product_name: string; quantity: number; unit_price: number; reason: string; notes?: string; reporter_name?: string; created_at: string }
 interface Expense { id: string; category: string; description: string; amount: number; expense_date: string; creator_name?: string; created_at: string }
 interface FixedExpense { id: string; name: string; category: string; amount: number; active: boolean }
-interface Payment { order_id: string; method: string; amount: number; created_at?: string }
+interface Payment { order_id: string; method: string; amount: number; created_at?: string; charged_by?: string; charger_name?: string }
 interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[]; expensesTotal:number; fixedTotal:number; wasteTotal:number; staffTotal:number; prevRevenue:number; prevCount:number; categoryBreakdown:{name:string;revenue:number}[]; expenseBreakdown:{name:string;amount:number}[]; weekdayData:number[] }
 
 // AudioContext único, desbloqueado con el primer toque — los navegadores
@@ -940,7 +940,7 @@ export default function App() {
     const ids = (orders||[]).filter((o:Order)=>o.status==="pagado").map((o:Order)=>o.id);
     const map: Record<string,Payment[]> = {};
     if (ids.length) {
-      const { data: pays } = await getDB().from("payments").select("order_id,method,amount,created_at").in("order_id",ids);
+      const { data: pays } = await getDB().from("payments").select("order_id,method,amount,created_at,charger_name").in("order_id",ids);
       (pays||[]).forEach((p:Payment) => { (map[p.order_id] = map[p.order_id]||[]).push(p); });
     }
     setHistPayments(map);
@@ -1039,8 +1039,16 @@ export default function App() {
     const total = items.reduce((s,i)=>s+i.price*i.qty,0);
     setSending(true);
     try {
-      let { data: order, error }: { data: Order|null; error: {message?:string}|null } = await getDB().from("orders").insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null,customer_name:customerName.trim()||null}).select().single();
-      // Si la columna customer_name aún no existe (fase2-mesas.sql sin correr), reintenta sin ella
+      let { data: order, error }: { data: Order|null; error: {message?:string}|null } = await getDB().from("orders")
+        .insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null,customer_name:customerName.trim()||null,created_by:profile?.id||null,creator_name:profile?.name||null})
+        .select().single();
+      // Si created_by/creator_name aún no existen (fase7 sin correr), reintenta sin ellas
+      if (error && /created_by|creator_name/.test(error.message||"")) {
+        ({ data: order, error } = await getDB().from("orders")
+          .insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null,customer_name:customerName.trim()||null})
+          .select().single());
+      }
+      // Si la columna customer_name tampoco existe (fase2-mesas.sql sin correr), reintenta sin ella
       if (error && /customer_name/.test(error.message||"")) {
         ({ data: order, error } = await getDB().from("orders").insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null}).select().single());
       }
@@ -2745,7 +2753,8 @@ export default function App() {
                             </p>
                             <p style={{fontSize:11,fontWeight:600,color:MUTED,marginTop:2}}>
                               Pedido: {new Date(o.created_at).toLocaleString("es-EC",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}
-                              {o.status==="pagado" && pays[0]?.created_at ? ` → Cobrado: ${new Date(pays[0].created_at).toLocaleString("es-EC",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}` : ""}
+                              {o.creator_name?` · Tomado por ${o.creator_name}`:""}
+                              {o.status==="pagado" && pays[0]?.created_at ? ` → Cobrado: ${new Date(pays[0].created_at).toLocaleString("es-EC",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}${pays[0]?.charger_name?` por ${pays[0].charger_name}`:""}` : ""}
                             </p>
                             {o.status==="pagado" && pays.length>0 && (
                               <p style={{fontSize:11,fontWeight:700,color:GOLD,marginTop:2}}>
