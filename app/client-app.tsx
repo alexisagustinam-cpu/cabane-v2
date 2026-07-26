@@ -57,6 +57,19 @@ function elapsed(created_at: string): string {
 }
 
 const $ = (n: number) => `$${n.toFixed(2)}`;
+// Exportar a CSV — con BOM UTF-8 para que Excel muestre bien tildes y ñ
+function downloadCSV(filename: string, rows: (string|number)[][]) {
+  const csv = rows.map(r => r.map(cell => {
+    const s = String(cell ?? "");
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+  }).join(",")).join("\n");
+  const blob = new Blob(["﻿"+csv], {type:"text/csv;charset=utf-8;"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 const MESAS = ["Mesa 0","Mesa 1","Mesa 2","Mesa 3","Mesa 4","Mesa 5","Mesa 6","Mesa 7","Mesa 8","Mesa 9","Para llevar","Delivery"];
 const CAT_ORDER = ["Sánduches","Desayunos","Clásicos","Ensaladas","Tablitas","Para Compartir","Bebidas","Cafés","Postres"];
 // Fecha local YYYY-MM-DD (toISOString daría la fecha UTC, que cambia a las 19h en Ecuador)
@@ -184,6 +197,10 @@ export default function App() {
   const [waiterView, setWaiterView] = useState<"map"|"order">("map");
   const [wOrders, setWOrders] = useState<Order[]>([]);
   const [customerName, setCustomerName] = useState("");
+  // Clave de idempotencia: si se corta la conexión justo cuando el pedido
+  // ya se creó en el servidor pero la respuesta no llegó, un reintento con
+  // la misma clave no debe crear un pedido duplicado.
+  const pendingOrderRef = useRef<string|null>(null);
   const [cashierMesa, setCashierMesa] = useState<string|null>(null);
   const [payModalMesa, setPayModalMesa] = useState<string|null>(null);
   const [moveOrder, setMoveOrder] = useState<Order|null>(null);
@@ -1007,6 +1024,7 @@ export default function App() {
   }
 
   function changeQty(id: string, delta: number) {
+    pendingOrderRef.current = null; // el pedido cambió, un reintento viejo no debe reusarse
     setCart(prev => {
       const p = products.find(x=>x.id===id)!;
       const cur = prev[id]||{...p,qty:0,notes:[],customNote:""};
@@ -1018,6 +1036,7 @@ export default function App() {
 
   // El cliente se retractó de un ítem completo — quitarlo sin pasar por el "-"
   function removeCartItem(id: string) {
+    pendingOrderRef.current = null;
     setCart(prev => { const n={...prev}; delete n[id]; return n; });
   }
 
@@ -1037,34 +1056,56 @@ export default function App() {
     const items = Object.values(cart) as CartItem[];
     if (!items.length || !customerName.trim()) return;
     const total = items.reduce((s,i)=>s+i.price*i.qty,0);
+    // Se mantiene la misma clave mientras haya un intento pendiente para
+    // esta composición del pedido — si se edita el carrito, se descarta.
+    if (!pendingOrderRef.current) pendingOrderRef.current = crypto.randomUUID();
+    const clientRef = pendingOrderRef.current;
     setSending(true);
     try {
-      let { data: order, error }: { data: Order|null; error: {message?:string}|null } = await getDB().from("orders")
-        .insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null,customer_name:customerName.trim()||null,created_by:profile?.id||null,creator_name:profile?.name||null})
-        .select().single();
+      let { data: order, error }: { data: Order|null; error: {message?:string;code?:string}|null } = await getDB().from("orders")
+        .insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null,customer_name:customerName.trim()||null,created_by:profile?.id||null,creator_name:profile?.name||null,client_ref:clientRef})
+        .select("*, order_items(*)").single();
+      // El intento anterior sí llegó a crear el pedido (se perdió la respuesta,
+      // no la escritura) — usa ese pedido en vez de crear uno nuevo.
+      if (error?.code === "23505") {
+        const { data: existing } = await getDB().from("orders").select("*, order_items(*)").eq("client_ref", clientRef).maybeSingle();
+        if (existing) { order = existing; error = null; }
+      }
+      // Si client_ref aún no existe (fase8 sin correr), reintenta sin ella
+      if (error && /client_ref/.test(error.message||"")) {
+        ({ data: order, error } = await getDB().from("orders")
+          .insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null,customer_name:customerName.trim()||null,created_by:profile?.id||null,creator_name:profile?.name||null})
+          .select("*, order_items(*)").single());
+      }
       // Si created_by/creator_name aún no existen (fase7 sin correr), reintenta sin ellas
       if (error && /created_by|creator_name/.test(error.message||"")) {
         ({ data: order, error } = await getDB().from("orders")
           .insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null,customer_name:customerName.trim()||null})
-          .select().single());
+          .select("*, order_items(*)").single());
       }
       // Si la columna customer_name tampoco existe (fase2-mesas.sql sin correr), reintenta sin ella
       if (error && /customer_name/.test(error.message||"")) {
-        ({ data: order, error } = await getDB().from("orders").insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null}).select().single());
+        ({ data: order, error } = await getDB().from("orders").insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null}).select("*, order_items(*)").single());
       }
-      if (error||!order) { setSentMsg("Error al enviar. Revisa tu conexión e intenta de nuevo."); setSending(false); return; }
-      const { error: itemsError } = await getDB().from("order_items").insert(items.map((i:CartItem)=>({
-        order_id:order.id, product_id:i.id, product_name:i.name,
-        quantity:i.qty, unit_price:i.price,
-        notes:[...i.notes, i.customNote].filter(Boolean).join(", ")||null
-      })));
-      if (itemsError) { setSentMsg("Pedido creado pero hubo un error con los items. Avisa al admin."); setSending(false); return; }
+      if (error||!order) { setSentMsg("Error al enviar. Revisa tu conexión e intenta de nuevo."); pendingOrderRef.current = null; setSending(false); return; }
+      // Si el pedido ya traía items (recuperado de un intento anterior), no los dupliques
+      if (!order.order_items?.length) {
+        const { error: itemsError } = await getDB().from("order_items").insert(items.map((i:CartItem)=>({
+          order_id:order!.id, product_id:i.id, product_name:i.name,
+          quantity:i.qty, unit_price:i.price,
+          notes:[...i.notes, i.customNote].filter(Boolean).join(", ")||null
+        })));
+        if (itemsError) { setSentMsg("Pedido creado pero hubo un error con los items. Avisa al admin."); setSending(false); return; }
+      }
+      pendingOrderRef.current = null;
       setCart({}); setModal(false); setTableNote(""); setCustomerName("");
       setSentMsg(`Pedido #${order.order_number} confirmado — cocina ya lo recibió`);
       setTimeout(()=>setSentMsg(""),5000);
       setWaiterView("map");
       loadWaiterOrders();
     } catch(_) {
+      // Puede haber llegado al servidor igual — se conserva la clave para
+      // que un reintento no cree un pedido duplicado.
       setSentMsg("Sin conexión. Verifica internet e intenta de nuevo.");
     }
     setSending(false);
@@ -2710,6 +2751,23 @@ export default function App() {
                         {s==="pagado"?"Pagados":s==="cancelado"?"Cancelados":"Abiertos"} ({s==="abiertos"?histOrders.filter(o=>OPEN_STATUSES.includes(o.status)).length:histOrders.filter(o=>o.status===s).length})
                       </button>
                     ))}
+                    <button disabled={!shown.length} onClick={()=>{
+                        const rows: (string|number)[][] = [["Pedido","Mesa","Cliente","Estado","Fecha pedido","Fecha cobro","Método(s)","Total","Tomado por","Cobrado por"]];
+                        shown.forEach(o=>{
+                          const pays = histPayments[o.id]||[];
+                          rows.push([
+                            o.order_number, o.table_label, o.customer_name||"", statusLabel[o.status]||o.status,
+                            new Date(o.created_at).toLocaleString("es-EC"),
+                            pays[0]?.created_at ? new Date(pays[0].created_at).toLocaleString("es-EC") : "",
+                            pays.map(p=>`${methodLabel[p.method]||p.method} ${p.amount.toFixed(2)}`).join(" + "),
+                            o.total.toFixed(2), o.creator_name||"", pays[0]?.charger_name||"",
+                          ]);
+                        });
+                        downloadCSV(`cabane-pedidos-${histStatus}-${periodLabel()}.csv`, rows);
+                      }}
+                      style={{...btn(CREAM2,DARK,!shown.length),height:36,padding:"0 14px",fontSize:12,minHeight:36,border:`1px solid ${BORDER}`}}>
+                      ⬇ Exportar CSV
+                    </button>
                   </div>
                 </div>
 
@@ -2821,7 +2879,7 @@ export default function App() {
                 )}
 
                 {/* Resumen */}
-                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:20}}>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10,marginBottom:14}}>
                   {[
                     {v:$(totalVar),l:`Gastos — ${periodLabel()}`,bg:ALERT_RED,fg:"#fff"},
                     {v:$(totalFixed),l:"Gastos fijos / mes",bg:DARK,fg:"#fff"},
@@ -2832,6 +2890,17 @@ export default function App() {
                       <p style={{fontSize:11,fontWeight:700,color:fg,opacity:0.65,textTransform:"uppercase" as const,letterSpacing:"0.08em"}}>{l}</p>
                     </div>
                   ))}
+                </div>
+
+                <div style={{display:"flex",justifyContent:"flex-end",marginBottom:20}}>
+                  <button disabled={!expenses.length} onClick={()=>{
+                      const rows: (string|number)[][] = [["Fecha","Categoría","Descripción","Monto","Registrado por"]];
+                      expenses.forEach(e=>rows.push([e.expense_date, e.category, e.description, e.amount.toFixed(2), e.creator_name||""]));
+                      downloadCSV(`cabane-gastos-${periodLabel()}.csv`, rows);
+                    }}
+                    style={{...btn(CREAM2,DARK,!expenses.length),height:36,padding:"0 14px",fontSize:12,minHeight:36,border:`1px solid ${BORDER}`}}>
+                    ⬇ Exportar CSV
+                  </button>
                 </div>
 
                 <div className="admin-2col">
