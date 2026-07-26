@@ -982,6 +982,11 @@ export default function App() {
     });
   }
 
+  // El cliente se retractó de un ítem completo — quitarlo sin pasar por el "-"
+  function removeCartItem(id: string) {
+    setCart(prev => { const n={...prev}; delete n[id]; return n; });
+  }
+
   function toggleNote(id: string, note: string) {
     setCart(prev => {
       const cur = prev[id]; if (!cur) return prev;
@@ -996,7 +1001,7 @@ export default function App() {
 
   async function sendToKitchen() {
     const items = Object.values(cart) as CartItem[];
-    if (!items.length) return;
+    if (!items.length || !customerName.trim()) return;
     const total = items.reduce((s,i)=>s+i.price*i.qty,0);
     setSending(true);
     try {
@@ -3565,17 +3570,24 @@ export default function App() {
                 const allNotes = [...i.notes, i.customNote].filter(Boolean).join(", ");
                 return (
                   <div key={i.id} style={{background:CREAM,borderRadius:10,padding:"10px 14px"}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div style={{display:"flex",alignItems:"center",gap:8}}>
-                        <span style={{background:RED,color:"#fff",width:22,height:22,borderRadius:"50%",fontSize:12,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center"}}>{i.qty}</span>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+                        <span style={{background:RED,color:"#fff",width:22,height:22,borderRadius:"50%",fontSize:12,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{i.qty}</span>
                         <span style={{fontSize:14,fontWeight:700,color:DARK}}>{i.name}</span>
                       </div>
-                      <span style={{fontSize:14,fontWeight:900,color:RED}}>{$(i.qty*i.price)}</span>
+                      <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+                        <span style={{fontSize:14,fontWeight:900,color:RED}}>{$(i.qty*i.price)}</span>
+                        <button onClick={()=>removeCartItem(i.id)} title="Quitar del pedido"
+                          style={{width:26,height:26,borderRadius:8,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED,fontWeight:900,fontSize:14,fontFamily:FONT,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                          ×
+                        </button>
+                      </div>
                     </div>
                     {allNotes && <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:4,paddingLeft:30}}>Nota: {allNotes}</p>}
                   </div>
                 );
               })}
+              {cartItems.length===0 && <p style={{fontSize:13,color:MUTED,fontWeight:600,textAlign:"center" as const,padding:"10px 0"}}>Sin productos — agregá algo o cerrá esta ventana</p>}
             </div>
 
             <div style={{background:DARK,borderRadius:12,padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
@@ -3583,10 +3595,13 @@ export default function App() {
               <span style={{fontSize:24,fontWeight:900,color:GOLD}}>{$(cartTotal)}</span>
             </div>
 
-            <input type="text" placeholder="Nombre del cliente (opcional) — ej: Ana"
+            <input type="text" placeholder="Nombre del cliente (obligatorio) — ej: Ana"
               value={customerName} onChange={e=>setCustomerName(e.target.value)}
-              style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,
-                fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none",marginBottom:10}}/>
+              style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${customerName.trim()?BORDER:RED}`,
+                fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none",marginBottom:!customerName.trim()?4:10}}/>
+            {!customerName.trim() && (
+              <p style={{fontSize:12,fontWeight:700,color:RED,marginBottom:8}}>Anotá el nombre del cliente para poder enviar a cocina</p>
+            )}
 
             <input type="text" placeholder="Nota de mesa (opcional) — ej: alérgico al gluten, misma cuenta…"
               value={tableNote} onChange={e=>setTableNote(e.target.value)}
@@ -3595,7 +3610,8 @@ export default function App() {
 
             <div style={{display:"grid",gridTemplateColumns:"1fr 1.6fr",gap:10}}>
               <button onClick={()=>setModal(false)} style={{...btn(CREAM2,DARK),height:52}}>Editar</button>
-              <button disabled={sending} onClick={sendToKitchen} style={{...btn(RED,"#fff",sending),height:52,fontSize:16,fontWeight:800}}>
+              <button disabled={sending||!customerName.trim()||cartItems.length===0} onClick={sendToKitchen}
+                style={{...btn(RED,"#fff",sending||!customerName.trim()||cartItems.length===0),height:52,fontSize:16,fontWeight:800}}>
                 {sending?"Enviando…":"Enviar a cocina"}
               </button>
             </div>
