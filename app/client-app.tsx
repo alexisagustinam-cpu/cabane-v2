@@ -2153,7 +2153,61 @@ export default function App() {
           {adminSection==="stats" && (
             <div>
               {/* Selector período */}
-              {renderPeriodPicker(loadAdminStats)}
+              {renderPeriodPicker(loadAdminStats, (
+                <button disabled={!adminStats} onClick={()=>{
+                    const s = adminStats!;
+                    const ingresos = s.todayRevenue, gastos = s.expensesTotal, fijos = s.fixedTotal, mermas = s.wasteTotal, consumoPersonal = s.staffTotal;
+                    const utilidad = ingresos - gastos - fijos - mermas - consumoPersonal;
+                    const rows: (string|number)[][] = [];
+                    rows.push(["Reporte", periodLabel()]);
+                    rows.push([]);
+                    rows.push(["Resumen"]);
+                    rows.push(["Facturado", ingresos.toFixed(2)]);
+                    rows.push(["Pedidos", s.todayCount]);
+                    rows.push(["Ticket promedio", (s.todayCount?ingresos/s.todayCount:0).toFixed(2)]);
+                    rows.push(["Efectivo", s.payBreakdown.efectivo.toFixed(2)]);
+                    rows.push(["Tarjeta", s.payBreakdown.tarjeta.toFixed(2)]);
+                    rows.push(["Transferencia", s.payBreakdown.transferencia.toFixed(2)]);
+                    rows.push([]);
+                    rows.push(["Utilidad"]);
+                    rows.push(["Ingresos (cobrado)", ingresos.toFixed(2)]);
+                    rows.push(["Gastos del período", gastos.toFixed(2)]);
+                    if (adminMode==="month") rows.push(["Gastos fijos mensuales", fijos.toFixed(2)]);
+                    rows.push(["Mermas (valor de venta)", mermas.toFixed(2)]);
+                    rows.push(["Consumo de personal (valor de venta)", consumoPersonal.toFixed(2)]);
+                    rows.push(["Utilidad", utilidad.toFixed(2)]);
+                    rows.push([]);
+                    rows.push(["¿A dónde se va la plata?"]);
+                    rows.push(["Categoría","Monto"]);
+                    [...s.expenseBreakdown,
+                      ...(adminMode==="month"&&s.fixedTotal>0?[{name:"Gastos fijos (mensual)",amount:s.fixedTotal}]:[]),
+                      ...(s.wasteTotal>0?[{name:"Mermas",amount:s.wasteTotal}]:[]),
+                      ...(s.staffTotal>0?[{name:"Consumo de personal",amount:s.staffTotal}]:[]),
+                    ].sort((a,b)=>b.amount-a.amount).forEach(r=>rows.push([r.name, r.amount.toFixed(2)]));
+                    rows.push([]);
+                    rows.push(["¿De dónde vienen las ventas?"]);
+                    rows.push(["Categoría","Facturado"]);
+                    s.categoryBreakdown.forEach(r=>rows.push([r.name, r.revenue.toFixed(2)]));
+                    rows.push([]);
+                    rows.push(["Top productos"]);
+                    rows.push(["Producto","Unidades","Facturado"]);
+                    s.topProducts.forEach(p=>rows.push([p.name, p.qty, p.revenue.toFixed(2)]));
+                    rows.push([]);
+                    rows.push(["Ventas por hora"]);
+                    rows.push(["Hora","Facturado"]);
+                    s.hourlyData.forEach((v,h)=>rows.push([`${h}:00`, v.toFixed(2)]));
+                    if (adminMode!=="day") {
+                      rows.push([]);
+                      rows.push(["Ventas por día de la semana"]);
+                      rows.push(["Día","Facturado"]);
+                      ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].forEach((l,i)=>rows.push([l, s.weekdayData[i].toFixed(2)]));
+                    }
+                    downloadCSV(`cabane-reportes-${periodLabel()}.csv`, rows);
+                  }}
+                  style={{...btn(CREAM2,DARK,!adminStats),height:38,padding:"0 14px",fontSize:13,border:`1px solid ${BORDER}`}}>
+                  ⬇ Exportar CSV
+                </button>
+              ))}
 
               {/* Métricas principales */}
               {(()=>{
