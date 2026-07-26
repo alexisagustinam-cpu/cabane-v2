@@ -208,6 +208,9 @@ export default function App() {
   const [wasteList, setWasteList] = useState<Waste[]>([]);
   const [wasteModal, setWasteModal] = useState(false);
   const [newWaste, setNewWaste] = useState({product_id:"",quantity:"1",reason:WASTE_REASONS[0],notes:""});
+  // Si se abrió "Dar de baja" desde un pedido puntual (cocina), se limita el
+  // selector a los productos de ESE pedido y se ata la merma a él.
+  const [wasteOrderCtx, setWasteOrderCtx] = useState<Order|null>(null);
   const [wasteMsg, setWasteMsg] = useState("");
   const [wasteSaving, setWasteSaving] = useState(false);
   // Fase 4: gastos, gastos fijos e historial de pedidos
@@ -741,18 +744,20 @@ export default function App() {
       p_quantity: qty,
       p_reason: newWaste.reason,
       p_notes: newWaste.notes.trim()||null,
+      p_order_id: wasteOrderCtx?.id||null,
     });
     if (error) {
       err = (error.code==="PGRST202"||/register_waste/.test(error.message||""))
-        ? "Falta correr fase3-mermas.sql en Supabase"
+        ? "Falta correr fase3-mermas.sql (o fase9-merma-por-pedido.sql) en Supabase"
         : error.message;
     } else if (data && data.ok === false) {
       err = data.error || "No se pudo registrar la baja";
     }
     if (err) setWasteMsg(`Error: ${err}`);
     else {
-      setWasteMsg("Baja registrada — el inventario ya se descontó");
+      setWasteMsg("Baja registrada — el inventario ya se descontó. El pedido sigue igual, se cobra normal.");
       setNewWaste({product_id:"",quantity:"1",reason:WASTE_REASONS[0],notes:""});
+      setWasteOrderCtx(null);
       setWasteModal(false);
       if (adminSection==="waste") loadWaste();
     }
@@ -1839,7 +1844,7 @@ export default function App() {
               <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK}}>Cocina</h1>
             </div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
-              <button onClick={()=>{setNewWaste({product_id:"",quantity:"1",reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
+              <button onClick={()=>{setWasteOrderCtx(null);setNewWaste({product_id:"",quantity:"1",reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
                 style={{...btn("rgba(198,40,40,0.1)",ALERT_RED),height:44,padding:"0 16px",fontSize:14,border:`1.5px solid ${ALERT_RED}44`}}>
                 🗑 Dar de baja
               </button>
@@ -1934,9 +1939,18 @@ export default function App() {
                     <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
                       {(o.order_items||[]).map(i=>(
                         <div key={i.id} style={{background:CREAM,borderRadius:8,padding:"8px 12px"}}>
-                          <div style={{display:"flex",justifyContent:"space-between",fontSize:14,fontWeight:700,color:DARK}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,fontSize:14,fontWeight:700,color:DARK}}>
                             <span>{i.quantity}× {i.product_name}</span>
-                            <span style={{fontWeight:800}}>{$(i.quantity*i.unit_price)}</span>
+                            <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                              <span style={{fontWeight:800}}>{$(i.quantity*i.unit_price)}</span>
+                              {i.product_id && (
+                                <button title="Se quemó / cayó / etc. — dar de baja este producto"
+                                  onClick={()=>{setWasteOrderCtx(o);setNewWaste({product_id:i.product_id,quantity:String(i.quantity),reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
+                                  style={{width:26,height:26,borderRadius:8,border:"none",cursor:"pointer",background:"rgba(198,40,40,0.1)",color:ALERT_RED,fontSize:13,fontFamily:FONT,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                                  🗑
+                                </button>
+                              )}
+                            </div>
                           </div>
                           {i.notes && (
                             <p style={{fontSize:12,fontWeight:700,color:RED,marginTop:4,display:"flex",alignItems:"center",gap:4}}>
@@ -3013,7 +3027,7 @@ export default function App() {
               <div>
                 {/* Selector período + registrar */}
                 {renderPeriodPicker(loadWaste, (
-                  <button onClick={()=>{setNewWaste({product_id:"",quantity:"1",reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
+                  <button onClick={()=>{setWasteOrderCtx(null);setNewWaste({product_id:"",quantity:"1",reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
                     style={{...btn(RED,"#fff"),height:38,padding:"0 16px",fontSize:13,marginLeft:"auto"}}>
                     + Registrar baja
                   </button>
@@ -3442,30 +3456,43 @@ export default function App() {
       {wasteModal && (()=>{
         const wasteProducts = products.length ? products : adminProducts;
         const qty = parseFloat(newWaste.quantity)||0;
-        const selProd = wasteProducts.find(p=>p.id===newWaste.product_id);
+        const ctxItem = wasteOrderCtx?.order_items?.find(i=>i.product_id===newWaste.product_id);
+        const unitPrice = wasteOrderCtx ? (ctxItem?.unit_price ?? 0) : (wasteProducts.find(p=>p.id===newWaste.product_id)?.price ?? 0);
+        const reasons = wasteOrderCtx ? WASTE_REASONS.filter(r=>r!==STAFF_REASON) : WASTE_REASONS;
+        const closeWaste = () => { setWasteModal(false); setWasteOrderCtx(null); };
         return (
-          <div onClick={e=>{if(e.target===e.currentTarget)setWasteModal(false)}}
+          <div onClick={e=>{if(e.target===e.currentTarget)closeWaste()}}
             style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
             <div style={{...card,padding:20,width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
                 <div>
                   <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Dar de baja</p>
-                  <p style={{fontSize:20,fontWeight:900,color:DARK}}>Producto no cobrado</p>
+                  <p style={{fontSize:20,fontWeight:900,color:DARK}}>
+                    {wasteOrderCtx ? `Pedido #${wasteOrderCtx.order_number} · ${wasteOrderCtx.table_label}` : "Producto no cobrado"}
+                  </p>
                 </div>
-                <button onClick={()=>setWasteModal(false)}
+                <button onClick={closeWaste}
                   style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
               </div>
 
               <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:8}}>Producto</p>
-              <select value={newWaste.product_id} onChange={e=>setNewWaste(w=>({...w,product_id:e.target.value}))}
-                style={{width:"100%",padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:12}}>
-                <option value="">— Elegir producto —</option>
-                {catsFor(wasteProducts).map(cat=>{
-                  const prods = wasteProducts.filter(p=>p.category===cat);
-                  if (!prods.length) return null;
-                  return <optgroup key={cat} label={cat}>{prods.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>;
-                })}
-              </select>
+              {wasteOrderCtx ? (
+                <select value={newWaste.product_id} onChange={e=>setNewWaste(w=>({...w,product_id:e.target.value}))}
+                  style={{width:"100%",padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:12}}>
+                  <option value="">— Elegir producto del pedido —</option>
+                  {(wasteOrderCtx.order_items||[]).map(i=><option key={i.id} value={i.product_id}>{i.product_name}</option>)}
+                </select>
+              ) : (
+                <select value={newWaste.product_id} onChange={e=>setNewWaste(w=>({...w,product_id:e.target.value}))}
+                  style={{width:"100%",padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:12}}>
+                  <option value="">— Elegir producto —</option>
+                  {catsFor(wasteProducts).map(cat=>{
+                    const prods = wasteProducts.filter(p=>p.category===cat);
+                    if (!prods.length) return null;
+                    return <optgroup key={cat} label={cat}>{prods.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</optgroup>;
+                  })}
+                </select>
+              )}
 
               <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:8}}>Cantidad</p>
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
@@ -3479,7 +3506,7 @@ export default function App() {
 
               <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:8}}>Motivo</p>
               <div style={{display:"flex",gap:6,flexWrap:"wrap" as const,marginBottom:12}}>
-                {WASTE_REASONS.map(r=>(
+                {reasons.map(r=>(
                   <button key={r} onClick={()=>setNewWaste(w=>({...w,reason:r}))} style={{
                     padding:"8px 14px",borderRadius:99,fontSize:13,fontWeight:700,fontFamily:FONT,cursor:"pointer",
                     border:`1.5px solid ${newWaste.reason===r?ALERT_RED:BORDER}`,
@@ -3495,10 +3522,10 @@ export default function App() {
                 style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,
                   fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:14}}/>
 
-              {selProd && qty>0 && (
+              {newWaste.product_id && qty>0 && (
                 <div style={{background:"rgba(198,40,40,0.06)",border:`1px solid ${ALERT_RED}33`,borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between"}}>
                   <span style={{fontSize:13,fontWeight:700,color:MUTED}}>Valor perdido</span>
-                  <span style={{fontSize:15,fontWeight:900,color:ALERT_RED}}>−{$(qty*selProd.price)}</span>
+                  <span style={{fontSize:15,fontWeight:900,color:ALERT_RED}}>−{$(qty*unitPrice)}</span>
                 </div>
               )}
 
@@ -3506,7 +3533,11 @@ export default function App() {
                 style={{...btn(ALERT_RED,"#fff",!newWaste.product_id||!qty||qty<=0||wasteSaving),width:"100%",height:52,fontSize:15}}>
                 {wasteSaving?"Guardando…":"Registrar baja"}
               </button>
-              <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:10}}>Se descuenta el inventario de sus ingredientes (si el producto tiene receta).</p>
+              <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:10}}>
+                {wasteOrderCtx
+                  ? "El pedido sigue igual y se cobra normal — esto solo registra el costo del producto para volver a hacerlo."
+                  : "Se descuenta el inventario de sus ingredientes (si el producto tiene receta)."}
+              </p>
             </div>
           </div>
         );
