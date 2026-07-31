@@ -10,6 +10,37 @@ function getDB(): any {
   return _db;
 }
 
+function expiredSessionResponse(): Response {
+  return Response.json({ error: "Tu sesión venció. Vuelve a ingresar." }, { status: 401 });
+}
+
+// Las pestañas del restaurante pueden quedar abiertas durante horas. Antes de
+// una acción administrativa, refresca un token próximo a vencer y reintenta
+// una sola vez si el servidor lo rechaza con 401.
+async function adminFetch(input: string, init: RequestInit): Promise<Response> {
+  const db = getDB();
+  let { data: { session } } = await db.auth.getSession();
+  if (!session || (session.expires_at && session.expires_at * 1000 <= Date.now() + 60000)) {
+    const refreshed = await db.auth.refreshSession();
+    session = refreshed.data.session;
+  }
+  if (!session) return expiredSessionResponse();
+
+  const requestWithToken = (token: string) => {
+    const headers = new Headers(init.headers);
+    headers.set("Authorization", `Bearer ${token}`);
+    return fetch(input, { ...init, headers });
+  };
+
+  let response = await requestWithToken(session.access_token);
+  if (response.status===401) {
+    const refreshed = await db.auth.refreshSession();
+    if (!refreshed.data.session) return expiredSessionResponse();
+    response = await requestWithToken(refreshed.data.session.access_token);
+  }
+  return response;
+}
+
 type Role = "waiter" | "kitchen" | "cashier" | "admin";
 type Status = "enviado" | "preparando" | "listo" | "pagado" | "cancelado";
 interface Profile { id: string; name: string; roles: Role[]; email?: string }
@@ -371,10 +402,9 @@ export default function App() {
     if (!newUser.name||!newUser.email||!newUser.password||!newUser.roles.length) return;
     setUserMsg("Creando usuario…");
     try {
-      const { data: { session: s } } = await getDB().auth.getSession();
-      const res = await fetch("/api/admin/users", {
+      const res = await adminFetch("/api/admin/users", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${s?.access_token||""}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(newUser),
       });
       const json = await res.json().catch(()=>({error:"Respuesta inválida del servidor"}));
@@ -399,10 +429,9 @@ export default function App() {
   async function patchUser(body: {id:string;name?:string;email?:string;password?:string}) {
     setUserMsg("Guardando…");
     try {
-      const { data: { session: s } } = await getDB().auth.getSession();
-      const res = await fetch("/api/admin/users", {
+      const res = await adminFetch("/api/admin/users", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${s?.access_token||""}` },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       const json = await res.json().catch(()=>({error:"Respuesta inválida del servidor"}));
@@ -429,10 +458,9 @@ export default function App() {
   function removeUserProfile(id: string) {
     askConfirm("¿Quitar acceso a este usuario?", async () => {
       try {
-        const { data: { session: s } } = await getDB().auth.getSession();
-        const res = await fetch("/api/admin/users", {
+        const res = await adminFetch("/api/admin/users", {
           method: "DELETE",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${s?.access_token||""}` },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id }),
         });
         const json = await res.json().catch(()=>({}));
@@ -976,10 +1004,9 @@ export default function App() {
     askConfirm(`¿Eliminar PERMANENTEMENTE ${ids.length} pedido${ids.length>1?"s":""}? No se puede deshacer y no queda ningún registro.`, async () => {
       setHistMsg("Eliminando…");
       try {
-        const { data: { session: s } } = await getDB().auth.getSession();
-        const res = await fetch("/api/admin/orders", {
+        const res = await adminFetch("/api/admin/orders", {
           method: "DELETE",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${s?.access_token||""}` },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ids }),
         });
         const json = await res.json().catch(()=>({error:"Respuesta inválida del servidor"}));
