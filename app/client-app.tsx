@@ -3193,14 +3193,14 @@ export default function App() {
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:10}}>
                     <input placeholder="Nombre completo" value={newUser.name} onChange={e=>setNewUser(u=>({...u,name:e.target.value}))} style={chipInput}/>
                     <input placeholder="Email" type="email" value={newUser.email} onChange={e=>setNewUser(u=>({...u,email:e.target.value}))} style={chipInput}/>
-                    <input placeholder="Contraseña inicial" type="password" value={newUser.password} onChange={e=>setNewUser(u=>({...u,password:e.target.value}))} style={chipInput}/>
+                    <input placeholder="Contraseña inicial (mín. 6)" type="password" minLength={6} value={newUser.password} onChange={e=>setNewUser(u=>({...u,password:e.target.value}))} style={chipInput}/>
                   </div>
                   <p style={{fontSize:12,fontWeight:700,color:MUTED,marginBottom:8}}>Roles</p>
                   <div style={{marginBottom:14}}>
                     {renderRoleChips(newUser.roles, r=>setNewUser(u=>({...u,roles:toggleRole(u.roles,r)})))}
                   </div>
-                  <button onClick={createUser} disabled={!newUser.name||!newUser.email||!newUser.password||!newUser.roles.length}
-                    style={{...btn(RED,"#fff",!newUser.name||!newUser.email||!newUser.password||!newUser.roles.length),width:"100%",height:48}}>
+                  <button onClick={createUser} disabled={!newUser.name||!newUser.email||newUser.password.length<6||!newUser.roles.length}
+                    style={{...btn(RED,"#fff",!newUser.name||!newUser.email||newUser.password.length<6||!newUser.roles.length),width:"100%",height:48}}>
                     Crear usuario
                   </button>
                   {userMsg && (

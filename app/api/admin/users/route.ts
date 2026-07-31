@@ -20,20 +20,29 @@ export async function POST(req: Request) {
   if (!name || !email || !password) {
     return Response.json({ error: "Faltan datos (nombre, email, contraseña)" }, { status: 400 });
   }
+  if (typeof password !== "string" || password.length < 6) {
+    return Response.json({ error: "La contraseña debe tener al menos 6 caracteres" }, { status: 400 });
+  }
   const roleErr = invalidRoles(roles);
   if (roleErr) return Response.json({ error: roleErr }, { status: 400 });
 
+  const cleanEmail = String(email).trim().toLowerCase();
+  const cleanName = String(name).trim();
   const { data, error } = await ctx.admin.auth.admin.createUser({
-    email,
+    email: cleanEmail,
     password,
     email_confirm: true,
-    user_metadata: { name },
+    user_metadata: { name: cleanName, role: roles[0], roles, email: cleanEmail },
   });
   if (error) return Response.json({ error: error.message }, { status: 400 });
 
   const { error: pErr } = await ctx.admin.from("profiles")
-    .upsert({ id: data.user.id, name, role: roles[0], roles, email });
-  if (pErr) return Response.json({ error: pErr.message }, { status: 400 });
+    .upsert({ id: data.user.id, name: cleanName, role: roles[0], roles, email: cleanEmail });
+  if (pErr) {
+    // No dejar cuentas de Auth huérfanas si falla el perfil de permisos.
+    await ctx.admin.auth.admin.deleteUser(data.user.id);
+    return Response.json({ error: pErr.message }, { status: 400 });
+  }
 
   return Response.json({ ok: true, id: data.user.id });
 }
