@@ -490,7 +490,7 @@ export default function App() {
     setKLoading(true);
     const todayStart = new Date(); todayStart.setHours(0,0,0,0);
     const [{ data: orders }, { data: summaryItems }] = await Promise.all([
-      getDB().from("orders").select("*, order_items(*)").in("status",["enviado","preparando","listo"]).order("created_at",{ascending:false}),
+      getDB().from("orders").select("*, order_items(*)").in("status",["enviado","preparando"]).order("created_at",{ascending:false}),
       getDB().from("order_items").select("product_name,quantity,orders!inner(created_at,status)")
         .neq("orders.status","cancelado").gte("orders.created_at",todayStart.toISOString()),
     ]);
@@ -572,7 +572,7 @@ export default function App() {
         (p: {new: Order}) => {
           setKOrders((prev:Order[])=>prev
             .map((o:Order)=>o.id===p.new.id?{...o,...p.new}:o)
-            .filter((o:Order)=>["enviado","preparando","listo"].includes(o.status)));
+            .filter((o:Order)=>["enviado","preparando"].includes(o.status)));
         })
       .subscribe();
     return () => { getDB().removeChannel(ch); };
@@ -1125,8 +1125,14 @@ export default function App() {
 
   async function kitchenUpdate(id: string, status: Status) {
     setUpdating(id);
-    setKOrders(prev=>prev.map(o=>o.id===id?{...o,status}:o));
-    await getDB().from("orders").update({status}).eq("id",id);
+    const { error } = await getDB().from("orders").update({status}).eq("id",id);
+    if (error) {
+      setWasteMsg(`Error al actualizar pedido: ${error.message}`);
+      setUpdating(null);
+      return;
+    }
+    if (status==="listo") setKOrders(prev=>prev.filter(o=>o.id!==id));
+    else setKOrders(prev=>prev.map(o=>o.id===id?{...o,status}:o));
     setUpdating(null);
   }
 
@@ -1864,11 +1870,10 @@ export default function App() {
           )}
 
           {/* Status counters */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:20}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:20}}>
             {[
               {label:"Nuevos",status:"enviado",count:kOrders.filter(o=>o.status==="enviado").length,bg:RED,fg:"#fff"},
               {label:"Preparando",status:"preparando",count:kOrders.filter(o=>o.status==="preparando").length,bg:GOLD,fg:DARK},
-              {label:"Listos",status:"listo",count:kOrders.filter(o=>o.status==="listo").length,bg:GREEN,fg:"#fff"},
             ].map(({label,count,bg,fg})=>(
               <div key={label} style={{background:bg,borderRadius:14,padding:"14px 10px",textAlign:"center" as const,boxShadow:`0 4px 16px ${bg}44`}}>
                 <p style={{fontSize:36,fontWeight:900,color:fg,lineHeight:1}}>{count}</p>
@@ -1966,7 +1971,6 @@ export default function App() {
                     </div>
                     <div style={{display:"flex",gap:8}}>
                       {nextLabel && <button disabled={busy} onClick={()=>kitchenUpdate(o.id,next as Status)} style={{...btn(RED,"#fff",busy),flex:1,height:50}}>{busy?"Guardando…":nextLabel}</button>}
-                      {o.status==="listo" && <button disabled={busy} onClick={()=>kitchenUpdate(o.id,"preparando")} style={{...btn(CREAM2,DARK,busy),flex:1,height:50}}>{busy?"…":"Regresar"}</button>}
                       {o.status==="enviado" && <button disabled={busy} onClick={()=>cancelOrder(o.id)} style={{...btn(CREAM2,MUTED,busy),height:50,padding:"0 14px",fontSize:13}}>Cancelar</button>}
                     </div>
                   </div>
