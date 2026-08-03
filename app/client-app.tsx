@@ -196,6 +196,7 @@ export default function App() {
   const [itemPayPending, setItemPayPending] = useState<Record<string,{product_name:string;quantity:number;paid:number;pending:number}>>({});
   const [itemPaySaving, setItemPaySaving] = useState(false);
   const [itemPayError, setItemPayError] = useState("");
+  const [partiallyPaidOrders, setPartiallyPaidOrders] = useState<Set<string>>(new Set());
   const [adminStats, setAdminStats] = useState<AdminStats|null>(null);
   const [adminProducts, setAdminProducts] = useState<Product[]>([]);
   const [adminSection, setAdminSection] = useState<"stats"|"products"|"notes"|"inventory"|"users"|"waste"|"expenses"|"history"|"config">("stats");
@@ -982,6 +983,18 @@ export default function App() {
   // de contar en caja y reportes porque esos solo suman status "pagado".
   function annulOrder(id: string) {
     askConfirm("¿Anular este pedido? Dejará de contar en la caja y los reportes.", async () => {
+      // Si ya tiene cobros parciales por persona sin cubrir el pedido entero,
+      // anularlo dejaría ese dinero ya cobrado fuera de todo reporte (los
+      // reportes solo suman pagos de pedidos en estado "pagado"). Hay que
+      // terminar de cobrarlo (o eliminarlo definitivamente) antes de anular.
+      const { data: order } = await getDB().from("orders").select("status").eq("id",id).single();
+      if (order && order.status !== "pagado") {
+        const { count } = await getDB().from("payments").select("id",{count:"exact",head:true}).eq("order_id",id);
+        if ((count||0) > 0) {
+          setHistMsg("Error: este pedido tiene cobros parciales por persona sin terminar de cubrir. Completá el cobro o eliminalo definitivamente antes de anularlo — anularlo ahora dejaría ese dinero fuera de los reportes.");
+          return;
+        }
+      }
       await getDB().from("orders").update({status:"cancelado"}).eq("id",id);
       loadHistory();
     });
@@ -1021,7 +1034,7 @@ export default function App() {
         if (!res.ok) { setHistMsg(`Error: ${json.error||res.statusText}`); return; }
         setHistOrders(prev=>prev.filter(o=>!ids.includes(o.id)));
         setHistSelected(prev=>{ const n=new Set(prev); ids.forEach(id=>n.delete(id)); return n; });
-        setHistMsg(`${json.deleted} pedido${json.deleted>1?"s":""} eliminado${json.deleted>1?"s":""}.`);
+        setHistMsg(`${json.deleted} pedido${json.deleted>1?"s":""} eliminado${json.deleted>1?"s":""}.${json.restoredInventory?" Inventario restaurado.":""}`);
       } catch(_) {
         setHistMsg("Error: sin conexión con el servidor.");
       }
@@ -1358,6 +1371,8 @@ export default function App() {
       return next;
     });
 
+    setPartiallyPaidOrders(prev => new Set(prev).add(itemPayModal.id));
+
     if (data.order_paid) {
       const orderId = itemPayModal.id;
       setCOrders((prev:Order[])=>prev.map(o=>o.id===orderId?{...o,status:"pagado"}:o));
@@ -1367,10 +1382,17 @@ export default function App() {
 
   // Tocar una mesa en el mapa abre el popup de cobro (igual que "Confirmar
   // pedido" del mesero) en vez de expandir la lista abajo en la página.
-  function openMesaModal(m: string) {
-    if (!mesaOrdersOf(cOrders, m).length) return;
+  // También detecta qué pedidos ya tienen cobros parciales por persona,
+  // para no ofrecer ahí los botones de cobro total (evitaría duplicar el
+  // cobro — ver fase 12 en pay_order, que ahora lo rechazaría igual, pero
+  // mejor no mostrar la opción).
+  async function openMesaModal(m: string) {
+    const orders = mesaOrdersOf(cOrders, m);
+    if (!orders.length) return;
     setCashierMesa(m);
     setPayModalMesa(m);
+    const { data: allocs } = await getDB().from("payment_item_allocations").select("order_id").in("order_id", orders.map(o=>o.id));
+    setPartiallyPaidOrders(new Set((allocs||[]).map((a:{order_id:string})=>a.order_id)));
   }
 
   // Si se cobran/mueven todos los pedidos de la mesa abierta, el popup se
@@ -3745,8 +3767,9 @@ export default function App() {
                 <span style={{fontSize:24,fontWeight:900,color:GOLD}}>{$(total)}</span>
               </div>
 
-              {/* Cobrar todo junto — solo si hay más de un pedido y todos están listos */}
-              {orders.length>1 && allListo && (
+              {/* Cobrar todo junto — solo si hay más de un pedido, todos listos y
+                  ninguno tiene ya cobros parciales por persona (fase 11/12) */}
+              {orders.length>1 && allListo && !orders.some(o=>partiallyPaidOrders.has(o.id)) && (
                 <div style={{marginBottom:18,paddingBottom:16,borderBottom:`1.5px dashed ${BORDER}`}}>
                   <p style={{fontSize:13,fontWeight:700,color:DARK,marginBottom:10}}>Cobrar mesa completa — ¿con qué método?</p>
                   <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
@@ -3764,7 +3787,12 @@ export default function App() {
               {/* Un card por pedido */}
               <div style={{display:"flex",flexDirection:"column" as const,gap:10}}>
                 {orders.map(o=>{
-                  const canPay = o.status==="listo", busy = paying===o.id;
+                  const isListo = o.status==="listo", busy = paying===o.id;
+                  const hasPartial = partiallyPaidOrders.has(o.id);
+                  // Si ya tiene cobros parciales por persona, los botones de cobro
+                  // total quedan bloqueados (duplicarían el cobro) — hay que
+                  // terminar de cobrar con "Por persona".
+                  const canPay = isListo && !hasPartial;
                   const expanded = expandedOrder===o.id;
                   return (
                     <div key={o.id} style={{background:CREAM,borderRadius:12,padding:"12px 14px"}}>
@@ -3797,7 +3825,8 @@ export default function App() {
                         </div>
                       )}
 
-                      {!canPay && <p style={{fontSize:12,color:MUTED,fontWeight:600,marginBottom:8,background:"#fff",borderRadius:8,padding:"6px 10px"}}>Esperando que cocina marque como Listo</p>}
+                      {!isListo && <p style={{fontSize:12,color:MUTED,fontWeight:600,marginBottom:8,background:"#fff",borderRadius:8,padding:"6px 10px"}}>Esperando que cocina marque como Listo</p>}
+                      {isListo && hasPartial && <p style={{fontSize:12,color:"#8A6210",fontWeight:700,marginBottom:8,background:"#FFF6DD",borderRadius:8,padding:"6px 10px"}}>Ya tiene cobros parciales por persona — seguí cobrando con &quot;Por persona&quot; hasta cubrir todo.</p>}
                       <div style={{display:"flex",gap:6,flexWrap:"wrap" as const}}>
                         {(["efectivo","tarjeta","transferencia"] as const).map(m=>(
                           <button key={m} disabled={!canPay||busy} onClick={()=>cobrar(o.id,m,o.total)}
@@ -3809,8 +3838,8 @@ export default function App() {
                           style={{...btn(CREAM2,DARK,!canPay||busy),flex:1,minWidth:80,height:44,fontSize:12,border:`1px solid ${BORDER}`}}>
                           Dividir
                         </button>
-                        <button disabled={!canPay||busy} onClick={()=>openItemPayModal(o)}
-                          style={{...btn(CREAM2,DARK,!canPay||busy),flex:1,minWidth:100,height:44,fontSize:12,border:`1px solid ${BORDER}`}}>
+                        <button disabled={!isListo||busy} onClick={()=>openItemPayModal(o)}
+                          style={{...btn(CREAM2,DARK,!isListo||busy),flex:1,minWidth:100,height:44,fontSize:12,border:`1px solid ${BORDER}`}}>
                           Por persona
                         </button>
                         <button disabled={busy} onClick={()=>setMoveOrder(o)}

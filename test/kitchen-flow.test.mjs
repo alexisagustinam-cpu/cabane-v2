@@ -23,5 +23,6 @@ test("kitchen no longer exposes ready or return controls", () => {
 
 test("cashier still receives ready orders and enables payment", () => {
   assert.match(client, /\["enviado","preparando","listo"\]/);
-  assert.match(client, /const canPay = o\.status==="listo"/);
+  assert.match(client, /const isListo = o\.status==="listo"/);
+  assert.match(client, /const canPay = isListo && !hasPartial/);
 });
