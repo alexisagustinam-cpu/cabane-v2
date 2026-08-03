@@ -189,6 +189,13 @@ export default function App() {
   const [expandedOrder, setExpandedOrder] = useState<string|null>(null);
   const [splitModal, setSplitModal] = useState<Order|null>(null);
   const [splitAmounts, setSplitAmounts] = useState({efectivo:"",tarjeta:"",transferencia:""});
+  const [itemPayModal, setItemPayModal] = useState<Order|null>(null);
+  const [itemPayAlloc, setItemPayAlloc] = useState<Record<string,string>>({});
+  const [itemPayPerson, setItemPayPerson] = useState("");
+  const [itemPayMethod, setItemPayMethod] = useState<"efectivo"|"tarjeta"|"transferencia">("efectivo");
+  const [itemPayPending, setItemPayPending] = useState<Record<string,{product_name:string;quantity:number;paid:number;pending:number}>>({});
+  const [itemPaySaving, setItemPaySaving] = useState(false);
+  const [itemPayError, setItemPayError] = useState("");
   const [adminStats, setAdminStats] = useState<AdminStats|null>(null);
   const [adminProducts, setAdminProducts] = useState<Product[]>([]);
   const [adminSection, setAdminSection] = useState<"stats"|"products"|"notes"|"inventory"|"users"|"waste"|"expenses"|"history"|"config">("stats");
@@ -1287,6 +1294,75 @@ export default function App() {
       await payOrder(o.id, [{method, amount:o.total}]);
     }
     setCashierMesa(null);
+  }
+
+  // Pago por consumo/persona: cada línea de la orden se puede cobrar en
+  // partes independientes (una persona paga sus productos, otra los suyos).
+  // Server-side: unit_price, cantidades pendientes y el cierre de la orden
+  // se calculan/validan en la RPC record_item_payment — no hay fallback
+  // cliente porque tiene que ser atómico (evita cobrar de más entre cajas).
+  async function openItemPayModal(order: Order) {
+    setItemPayModal(order);
+    setItemPayAlloc({});
+    setItemPayPerson("");
+    setItemPayMethod("efectivo");
+    setItemPayError("");
+    const items = order.order_items||[];
+    const { data: allocs } = await getDB().from("payment_item_allocations").select("order_item_id,quantity").eq("order_id", order.id);
+    const paidMap: Record<string,number> = {};
+    (allocs||[]).forEach((a:{order_item_id:string;quantity:number})=>{ paidMap[a.order_item_id]=(paidMap[a.order_item_id]||0)+a.quantity; });
+    const pending: Record<string,{product_name:string;quantity:number;paid:number;pending:number}> = {};
+    items.forEach(i=>{
+      const paid = paidMap[i.id]||0;
+      pending[i.id] = { product_name: i.product_name, quantity: i.quantity, paid, pending: Math.max(0, i.quantity-paid) };
+    });
+    setItemPayPending(pending);
+  }
+
+  async function submitItemPayment() {
+    if (!itemPayModal) return;
+    const allocations = Object.entries(itemPayAlloc)
+      .map(([order_item_id, qty])=>({order_item_id, quantity: parseFloat(qty)||0}))
+      .filter(a=>a.quantity>0);
+    if (!allocations.length) { setItemPayError("Seleccioná al menos un producto"); return; }
+    for (const a of allocations) {
+      const p = itemPayPending[a.order_item_id];
+      if (!p || a.quantity > p.pending + 0.0001) {
+        setItemPayError(`${p?.product_name||"Producto"}: cantidad mayor a lo pendiente`);
+        return;
+      }
+    }
+    setItemPaySaving(true);
+    setItemPayError("");
+    const { data, error } = await getDB().rpc("record_item_payment", {
+      p_order_id: itemPayModal.id,
+      p_method: itemPayMethod,
+      p_allocations: allocations,
+      p_person_name: itemPayPerson.trim() || null,
+    });
+    setItemPaySaving(false);
+    if (error) { setItemPayError(error.message); return; }
+    if (data && data.ok === false) { setItemPayError(data.error || "No se pudo registrar el pago"); return; }
+
+    const nextPending: typeof itemPayPending = {};
+    (data.pending_items||[]).forEach((p:{order_item_id:string;product_name:string;quantity:number;paid:number;pending:number})=>{
+      nextPending[p.order_item_id] = { product_name: p.product_name, quantity: p.quantity, paid: p.paid, pending: p.pending };
+    });
+    setItemPayPending(nextPending);
+    setItemPayAlloc({});
+    setItemPayPerson("");
+
+    setCPayBreakdown((prev:{efectivo:number;tarjeta:number;transferencia:number})=>{
+      const next = {...prev};
+      next[itemPayMethod] = (next[itemPayMethod]||0) + (data.amount||0);
+      return next;
+    });
+
+    if (data.order_paid) {
+      const orderId = itemPayModal.id;
+      setCOrders((prev:Order[])=>prev.map(o=>o.id===orderId?{...o,status:"pagado"}:o));
+      setItemPayModal(null);
+    }
   }
 
   // Tocar una mesa en el mapa abre el popup de cobro (igual que "Confirmar
@@ -3733,6 +3809,10 @@ export default function App() {
                           style={{...btn(CREAM2,DARK,!canPay||busy),flex:1,minWidth:80,height:44,fontSize:12,border:`1px solid ${BORDER}`}}>
                           Dividir
                         </button>
+                        <button disabled={!canPay||busy} onClick={()=>openItemPayModal(o)}
+                          style={{...btn(CREAM2,DARK,!canPay||busy),flex:1,minWidth:100,height:44,fontSize:12,border:`1px solid ${BORDER}`}}>
+                          Por persona
+                        </button>
                         <button disabled={busy} onClick={()=>setMoveOrder(o)}
                           style={{...btn(CREAM2,DARK,busy),minWidth:76,height:44,fontSize:12,border:`1px solid ${BORDER}`}}>
                           Mover ⇄
@@ -3836,6 +3916,92 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ── MODAL PAGO POR CONSUMO/PERSONA ──────────────────────── */}
+      {itemPayModal && (()=>{
+        const items = itemPayModal.order_items||[];
+        const methodLabels={efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia"};
+        const methodBg={efectivo:DARK,tarjeta:RED,transferencia:GOLD};
+        const methodFg={efectivo:"#fff",tarjeta:"#fff",transferencia:DARK};
+        const subtotal = items.reduce((s,i)=>s+(parseFloat(itemPayAlloc[i.id])||0)*i.unit_price,0);
+        const anyPending = items.some(i=>(itemPayPending[i.id]?.pending ?? i.quantity) > 0.0001);
+        const closeModal = () => setItemPayModal(null);
+        return (
+          <div onClick={e=>{if(e.target===e.currentTarget)closeModal()}}
+            style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
+            <div style={{...card,padding:20,width:"100%",maxWidth:480,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+                <div>
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Pago por consumo</p>
+                  <p style={{fontSize:20,fontWeight:900,color:DARK}}>#{itemPayModal.order_number} · {itemPayModal.table_label}</p>
+                </div>
+                <button onClick={closeModal}
+                  style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
+              </div>
+
+              {!anyPending ? (
+                <div style={{background:"rgba(47,125,50,0.1)",border:`1.5px solid ${GREEN}`,borderRadius:10,padding:"14px 16px"}}>
+                  <p style={{fontSize:14,fontWeight:800,color:GREEN}}>Todo el pedido está cobrado</p>
+                </div>
+              ) : (
+                <>
+                  <p style={{fontSize:13,fontWeight:600,color:MUTED,marginBottom:10}}>Elegí qué consumió esta persona y con qué método paga. Podés repetir esto varias veces hasta cubrir todo el pedido.</p>
+
+                  <div style={{display:"flex",flexDirection:"column" as const,gap:8,marginBottom:14}}>
+                    {items.map(i=>{
+                      const p = itemPayPending[i.id] || {product_name:i.product_name, quantity:i.quantity, paid:0, pending:i.quantity};
+                      if (p.pending<=0.0001) return (
+                        <div key={i.id} style={{display:"flex",justifyContent:"space-between",padding:"8px 10px",background:CREAM,borderRadius:8,opacity:0.5}}>
+                          <span style={{fontSize:13,fontWeight:700,color:DARK}}>{i.product_name}</span>
+                          <span style={{fontSize:12,fontWeight:700,color:GREEN}}>Cobrado</span>
+                        </div>
+                      );
+                      return (
+                        <div key={i.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",background:CREAM,borderRadius:8}}>
+                          <div style={{flex:1,minWidth:0}}>
+                            <p style={{fontSize:13,fontWeight:700,color:DARK}}>{i.product_name}</p>
+                            <p style={{fontSize:11,fontWeight:600,color:MUTED}}>Pendiente: {p.pending} de {p.quantity} · {$(i.unit_price)} c/u</p>
+                          </div>
+                          <input type="number" min="0" max={p.pending} step="1" placeholder="0"
+                            value={itemPayAlloc[i.id]||""}
+                            onChange={e=>setItemPayAlloc(prev=>({...prev,[i.id]:e.target.value}))}
+                            style={{width:64,height:40,borderRadius:8,border:`1px solid ${BORDER}`,padding:"0 8px",fontSize:14,fontWeight:700,fontFamily:FONT,color:DARK,background:"#fff",textAlign:"center" as const}}/>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <input placeholder="Nombre de la persona (opcional)" value={itemPayPerson} onChange={e=>setItemPayPerson(e.target.value)}
+                    style={{width:"100%",height:44,borderRadius:10,border:`1px solid ${BORDER}`,padding:"0 14px",fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:12}}/>
+
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,marginBottom:8,textTransform:"uppercase" as const,letterSpacing:"0.06em"}}>Método de pago</p>
+                  <div style={{display:"flex",gap:8,marginBottom:14}}>
+                    {(["efectivo","tarjeta","transferencia"] as const).map(m=>(
+                      <button key={m} onClick={()=>setItemPayMethod(m)}
+                        style={{...btn(itemPayMethod===m?methodBg[m]:CREAM2,itemPayMethod===m?methodFg[m]:DARK),flex:1,height:44,fontSize:13,
+                          border:itemPayMethod===m?"none":`1px solid ${BORDER}`}}>
+                        {methodLabels[m]}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div style={{display:"flex",justifyContent:"space-between",background:DARK,borderRadius:10,padding:"12px 14px",marginBottom:12}}>
+                    <span style={{fontSize:13,color:"rgba(255,255,255,0.5)",fontWeight:600}}>Subtotal seleccionado</span>
+                    <span style={{fontSize:18,fontWeight:900,color:GOLD}}>{$(subtotal)}</span>
+                  </div>
+
+                  {itemPayError && <p style={{fontSize:12,fontWeight:700,color:ALERT_RED,marginBottom:10}}>{itemPayError}</p>}
+
+                  <button disabled={itemPaySaving||subtotal<=0} onClick={submitItemPayment}
+                    style={{...btn(RED,"#fff",itemPaySaving||subtotal<=0),width:"100%",height:54,fontSize:16}}>
+                    {itemPaySaving?"Guardando…":"Registrar pago"}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {modal && (
         <div onClick={e=>{if(e.target===e.currentTarget)setModal(false)}}
