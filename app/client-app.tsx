@@ -195,6 +195,7 @@ export default function App() {
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [invTab, setInvTab] = useState<"stock"|"recetas">("stock");
+  const [ingredientSearch, setIngredientSearch] = useState("");
   const [newIngr, setNewIngr] = useState({name:"",unit:"unidades",stock_current:"",stock_min:""});
   const [restockId, setRestockId] = useState<string|null>(null);
   const [restockAmt, setRestockAmt] = useState("");
@@ -2579,6 +2580,10 @@ export default function App() {
                   const low = ingredients.filter(i=>i.stock_current >= i.stock_min && i.stock_current < i.stock_min*2);
                   const ok = ingredients.filter(i=>i.stock_current >= i.stock_min*2);
                   const sorted = [...critical, ...low, ...ok];
+                  const normalizedIngredientSearch = ingredientSearch.trim().toLocaleLowerCase("es");
+                  const filteredSorted = normalizedIngredientSearch
+                    ? sorted.filter(i=>i.name.toLocaleLowerCase("es").includes(normalizedIngredientSearch))
+                    : sorted;
 
                   const sendWhatsApp = (mode:"critical"|"critical+low"|"all") => {
                     const date = new Date().toLocaleDateString("es-EC",{day:"2-digit",month:"2-digit",year:"numeric"});
@@ -2655,9 +2660,15 @@ export default function App() {
                         <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>
                           Ingredientes ({ingredients.length}) — ordenados por urgencia
                         </p>
+                        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:14}}>
+                          <input aria-label="Buscar ingrediente" placeholder="🔎 Buscar ingrediente…" value={ingredientSearch} onChange={e=>setIngredientSearch(e.target.value)}
+                            style={{flex:1,padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                          {ingredientSearch && <button onClick={()=>setIngredientSearch("")} style={{...btn(CREAM2,DARK),height:38,padding:"0 12px",fontSize:12}}>Limpiar</button>}
+                        </div>
                         {ingredients.length===0 && <p style={{fontSize:13,color:MUTED,fontWeight:600}}>Sin ingredientes — agrega el primero abajo</p>}
+                        {ingredients.length>0 && filteredSorted.length===0 && <p style={{fontSize:13,color:MUTED,fontWeight:600}}>No hay ingredientes que coincidan con “{ingredientSearch}”.</p>}
                         <div style={{display:"flex",flexDirection:"column" as const,gap:8}}>
-                          {sorted.map(ingr=>{
+                          {filteredSorted.map(ingr=>{
                             const pct = Math.min(100, (ingr.stock_current / (ingr.stock_min*2))*100);
                             const isRestock = restockId===ingr.id;
                             const isEdit = editIngr?.id===ingr.id;
