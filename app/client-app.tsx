@@ -542,16 +542,21 @@ export default function App() {
   // Si la mesa ya tiene un pedido abierto, precarga el nombre de esa
   // persona (no hace falta volver a escribirlo para pedir "una ronda más")
   // — el mesero lo puede cambiar si es alguien distinto en la misma mesa.
-  // Solo se dispara al cambiar de mesa (via ref) — si dependiera de wOrders
-  // directo, cualquier actualización de otra mesa borraría lo que el
-  // mesero esté escribiendo ahora mismo.
-  const wOrdersRef = useRef<Order[]>(wOrders);
-  useEffect(() => { wOrdersRef.current = wOrders; }, [wOrders]);
+  // Depende también de wOrders (no solo de mesa) porque al entrar los
+  // pedidos de esa mesa pueden no haber llegado todavía del servidor —
+  // si solo reintentara al cambiar de mesa, en la mesa por defecto (la
+  // que ya está seleccionada al entrar) se quedaba con el resultado vacío
+  // de ese primer instante y nunca lo volvía a intentar. customerNameEdited
+  // corta los reintentos apenas el mesero escribe algo, para no borrarle
+  // lo que está tipeando.
+  const [customerNameEdited, setCustomerNameEdited] = useState(false);
+  useEffect(() => { setCustomerNameEdited(false); }, [mesa]);
   useEffect(() => {
-    const existing = mesaOrdersOf(wOrdersRef.current, mesa);
+    if (customerNameEdited) return;
+    const existing = mesaOrdersOf(wOrders, mesa);
     const lastNamed = [...existing].reverse().find(o=>o.customer_name);
     setCustomerName(lastNamed?.customer_name || "");
-  }, [mesa]);
+  }, [mesa, wOrders, customerNameEdited]);
 
   // Realtime mesero — el mapa de mesas se actualiza solo
   useEffect(() => {
@@ -4195,7 +4200,7 @@ export default function App() {
             </div>
 
             <input type="text" placeholder="Nombre del cliente (obligatorio) — ej: Ana"
-              value={customerName} onChange={e=>setCustomerName(e.target.value)}
+              value={customerName} onChange={e=>{setCustomerName(e.target.value);setCustomerNameEdited(true);}}
               style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${customerName.trim()?BORDER:RED}`,
                 fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none",marginBottom:!customerName.trim()?4:10}}/>
             {!customerName.trim() && (
