@@ -173,6 +173,7 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<Record<string,CartItem>>({});
   const [mesa, setMesa] = useState(MESAS[0]);
+  const [showMesaPreview, setShowMesaPreview] = useState(false);
   const [cat, setCat] = useState("");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState(false);
@@ -252,6 +253,7 @@ export default function App() {
   // selector a los productos de ESE pedido y se ata la merma a él.
   const [wasteOrderCtx, setWasteOrderCtx] = useState<Order|null>(null);
   const [wasteMsg, setWasteMsg] = useState("");
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission|"unsupported">("default");
   const [wasteSaving, setWasteSaving] = useState(false);
   // Fase 4: gastos, gastos fijos e historial de pedidos
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -293,6 +295,9 @@ export default function App() {
     // Desbloquear audio con el primer toque (el beep de cocina lo necesita)
     const unlock = () => unlockAudio();
     document.addEventListener("pointerdown", unlock);
+    // Notificaciones del sistema para pedidos nuevos en cocina (además del
+    // sonido) — así avisa aunque la pestaña esté en segundo plano
+    setNotifPermission(typeof Notification==="undefined" ? "unsupported" : Notification.permission);
     // Restaurar carrito y mesa si la página se recargó a mitad de un pedido
     try {
       const savedCart = localStorage.getItem("cabane_cart");
@@ -503,6 +508,10 @@ export default function App() {
     }
   }, [screen, profile, loadWaiterOrders]);
 
+  // Al cambiar de mesa se cierra la previsualización de lo ya pedido —
+  // si no, queda abierta mostrando los items de la mesa anterior.
+  useEffect(() => { setShowMesaPreview(false); }, [mesa]);
+
   // Realtime mesero — el mapa de mesas se actualiza solo
   useEffect(() => {
     if (screen!=="waiter") return;
@@ -522,6 +531,11 @@ export default function App() {
       .subscribe();
     return () => { getDB().removeChannel(ch); };
   }, [screen]);
+
+  function requestNotifPermission() {
+    if (typeof Notification==="undefined") { setNotifPermission("unsupported"); return; }
+    Notification.requestPermission().then(p=>setNotifPermission(p));
+  }
 
   const loadKitchen = useCallback(async () => {
     setKLoading(true);
@@ -600,6 +614,18 @@ export default function App() {
       .on("postgres_changes",{event:"INSERT",schema:"public",table:"orders"},
         async (p: {new: Order}) => {
           playBeep();
+          // Notificación del sistema — avisa aunque la pestaña esté en
+          // segundo plano (requiere permiso ya concedido; ver banner arriba)
+          if (typeof Notification!=="undefined" && Notification.permission==="granted") {
+            try {
+              const n = new Notification(`Nuevo pedido — ${p.new.table_label}`, {
+                body: `#${p.new.order_number}${p.new.customer_name?" · "+p.new.customer_name:""}`,
+                icon: "/icon-192.png",
+                tag: p.new.id,
+              });
+              n.onclick = () => { window.focus(); n.close(); };
+            } catch(_) { /* algunos navegadores la bloquean silenciosamente */ }
+          }
           // El evento realtime llega sin items — la tarjeta salía vacía en cocina
           const { data } = await getDB().from("orders").select("*, order_items(*)").eq("id",p.new.id).single();
           const full: Order = data || {...p.new, order_items:[]};
@@ -1806,12 +1832,38 @@ export default function App() {
                   {(()=>{
                     const existing = mesaOrdersOf(wOrders, mesa);
                     return existing.length>0 ? (
-                      <span style={{fontSize:12,fontWeight:700,color:"#8A6210",background:"rgba(181,137,74,0.18)",borderRadius:99,padding:"4px 10px"}}>
-                        Ya tiene {existing.length} pedido{existing.length>1?"s":""}: {existing.map(o=>o.customer_name||`#${o.order_number}`).join(", ")}
-                      </span>
+                      <button onClick={()=>setShowMesaPreview(v=>!v)}
+                        style={{fontSize:12,fontWeight:700,color:"#8A6210",background:"rgba(181,137,74,0.18)",border:"none",borderRadius:99,padding:"4px 10px",cursor:"pointer",fontFamily:FONT}}>
+                        Ya tiene {existing.length} pedido{existing.length>1?"s":""}: {existing.map(o=>o.customer_name||`#${o.order_number}`).join(", ")} {showMesaPreview?"▲":"▼"}
+                      </button>
                     ) : null;
                   })()}
                 </div>
+
+                {/* Previsualización de lo ya pedido en esta mesa — para no duplicar */}
+                {showMesaPreview && (()=>{
+                  const existing = mesaOrdersOf(wOrders, mesa);
+                  const statusLabel: Record<string,string> = { enviado:"Nuevo", preparando:"En cocina", listo:"Listo para cobrar" };
+                  return existing.length>0 ? (
+                    <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,padding:"10px 12px",marginBottom:10,display:"flex",flexDirection:"column" as const,gap:10}}>
+                      {existing.map(o=>(
+                        <div key={o.id}>
+                          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                            <span style={{fontSize:12,fontWeight:800,color:DARK}}>#{o.order_number}{o.customer_name?` · ${o.customer_name}`:""}</span>
+                            <span style={{fontSize:10,fontWeight:700,color:"#8A6210",background:"rgba(181,137,74,0.18)",borderRadius:99,padding:"2px 8px"}}>{statusLabel[o.status]||o.status}</span>
+                          </div>
+                          {(o.order_items||[]).map(i=>(
+                            <p key={i.id} style={{fontSize:12,fontWeight:600,color:MUTED,paddingLeft:4,margin:"2px 0"}}>
+                              {i.quantity}× {i.product_name}{i.notes?` — ${i.notes}`:""}
+                            </p>
+                          ))}
+                          {!(o.order_items||[]).length && <p style={{fontSize:12,color:MUTED,fontWeight:600,paddingLeft:4}}>Sin detalle de items</p>}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
+
                 {/* Búsqueda */}
                 <input
                   type="search"
@@ -1985,6 +2037,23 @@ export default function App() {
               </button>
             </div>
           </div>
+
+          {notifPermission==="default" && (
+            <div style={{marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap" as const,
+              background:"rgba(181,137,74,0.12)",border:`1.5px solid ${GOLD}`,borderRadius:12,padding:"12px 16px"}}>
+              <span style={{fontSize:13,fontWeight:700,color:DARK,flex:1,minWidth:200}}>
+                🔔 Activá las notificaciones para que avise aunque esta pestaña esté en segundo plano.
+              </span>
+              <button onClick={requestNotifPermission} style={{...btn(GOLD,DARK),height:38,padding:"0 16px",fontSize:13}}>Activar</button>
+            </div>
+          )}
+          {notifPermission==="denied" && (
+            <div style={{marginBottom:14,background:"#FFF6DD",border:"1.5px solid #D4A000",borderRadius:12,padding:"10px 16px"}}>
+              <span style={{fontSize:12,fontWeight:700,color:"#8A6210"}}>
+                Las notificaciones están bloqueadas en este navegador — para activarlas hay que habilitarlas manualmente en la configuración del sitio (el ícono de candado junto a la dirección).
+              </span>
+            </div>
+          )}
 
           {wasteMsg && (
             <div style={{marginBottom:14,borderRadius:12,padding:"12px 16px",fontSize:14,fontWeight:700,
