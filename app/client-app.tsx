@@ -1218,7 +1218,10 @@ export default function App() {
         if (itemsError) { setSentMsg("Pedido creado pero hubo un error con los items. Avisa al admin."); setSending(false); return; }
       }
       pendingOrderRef.current = null;
-      setCart({}); setModal(false); setTableNote(""); setCustomerName("");
+      // El nombre NO se limpia — sigue siendo la misma mesa/cliente, así que
+      // si el mesero manda otra ronda enseguida ya lo tiene puesto. Se
+      // actualiza solo cuando realmente cambia de mesa (ver useEffect de mesa).
+      setCart({}); setModal(false); setTableNote("");
       setSentMsg(`Pedido #${order.order_number} confirmado — cocina ya lo recibió`);
       setTimeout(()=>setSentMsg(""),5000);
       setWaiterView("map");
