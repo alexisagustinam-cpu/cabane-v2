@@ -1493,6 +1493,14 @@ export default function App() {
     }
   }
 
+  // Mapa de mesas (compartido entre mesero y caja) — declarada antes del
+  // guard de hidratación de abajo porque algunos useEffect (registrados
+  // antes de ese corte, como exige React) la necesitan: si quedara más
+  // abajo, esos efectos la referenciarían sin haberse inicializado nunca
+  // en el primer render (ok=false), y rompía la carga para todos.
+  const mesaOrdersOf = (orders: Order[], m: string) =>
+    orders.filter(o=>o.table_label===m && !["pagado","cancelado"].includes(o.status));
+
   if (!ok) return null;
 
   const cartItems = Object.values(cart);
@@ -1525,10 +1533,6 @@ export default function App() {
     };
     return { background:m[s][0], color:m[s][1], padding:"4px 12px", borderRadius:99, fontSize:12, fontWeight:800, letterSpacing:"0.03em", display:"inline-block" as const };
   };
-
-  // ── Mapa de mesas (compartido entre mesero y caja) ──────────────
-  const mesaOrdersOf = (orders: Order[], m: string) =>
-    orders.filter(o=>o.table_label===m && !["pagado","cancelado"].includes(o.status));
 
   // Categorías dinámicas + las huérfanas que aún tengan productos
   const catsFor = (prods: Product[]) =>
