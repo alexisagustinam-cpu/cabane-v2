@@ -56,10 +56,27 @@ interface FixedExpense { id: string; name: string; category: string; amount: num
 interface Payment { order_id: string; method: string; amount: number; created_at?: string; charged_by?: string; charger_name?: string }
 interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[]; expensesTotal:number; fixedTotal:number; wasteTotal:number; staffTotal:number; prevRevenue:number; prevCount:number; categoryBreakdown:{name:string;revenue:number}[]; expenseBreakdown:{name:string;amount:number}[]; weekdayData:number[] }
 
-// AudioContext único, desbloqueado con el primer toque — los navegadores
-// bloquean el audio sin interacción previa y el beep fallaba en silencio.
+// Sonido de pedido nuevo: un <audio> real con un archivo precargado, en vez
+// de sintetizar el tono con Web Audio — en varios navegadores de celular
+// (sobre todo si la pestaña lleva un rato sin interacción) un AudioContext
+// nuevo/oscilador falla en silencio, pero un <audio> "calentado" con play()
+// dentro del primer toque y reusado después es mucho más confiable.
+let _notifyAudio: HTMLAudioElement | null = null;
 let _audioCtx: AudioContext | null = null;
 function unlockAudio() {
+  try {
+    if (!_notifyAudio) {
+      _notifyAudio = new Audio("/notify.mp3");
+      _notifyAudio.volume = 1;
+    }
+    // "Calentar" el elemento con un play+pause silencioso dentro del gesto
+    // del usuario — así los play() posteriores (disparados por un evento
+    // async de realtime, sin gesto) quedan permitidos por el navegador.
+    const a = _notifyAudio;
+    const prevMuted = a.muted;
+    a.muted = true;
+    a.play().then(() => { a.pause(); a.currentTime = 0; a.muted = prevMuted; }).catch(() => { a.muted = prevMuted; });
+  } catch(_) { /* silently ignore */ }
   try {
     if (!_audioCtx) _audioCtx = new AudioContext();
     if (_audioCtx.state === "suspended") _audioCtx.resume();
@@ -67,7 +84,17 @@ function unlockAudio() {
 }
 function playBeep() {
   try {
-    unlockAudio();
+    if (_notifyAudio) {
+      _notifyAudio.currentTime = 0;
+      _notifyAudio.play().catch(() => playSynthBeep());
+      return;
+    }
+  } catch(_) { /* cae al sintetizado */ }
+  playSynthBeep();
+}
+// Respaldo si el archivo de audio no cargó — mismo tono de antes
+function playSynthBeep() {
+  try {
     const ctx = _audioCtx;
     if (!ctx) return;
     const osc = ctx.createOscillator();
@@ -511,6 +538,20 @@ export default function App() {
   // Al cambiar de mesa se cierra la previsualización de lo ya pedido —
   // si no, queda abierta mostrando los items de la mesa anterior.
   useEffect(() => { setShowMesaPreview(false); }, [mesa]);
+
+  // Si la mesa ya tiene un pedido abierto, precarga el nombre de esa
+  // persona (no hace falta volver a escribirlo para pedir "una ronda más")
+  // — el mesero lo puede cambiar si es alguien distinto en la misma mesa.
+  // Solo se dispara al cambiar de mesa (via ref) — si dependiera de wOrders
+  // directo, cualquier actualización de otra mesa borraría lo que el
+  // mesero esté escribiendo ahora mismo.
+  const wOrdersRef = useRef<Order[]>(wOrders);
+  useEffect(() => { wOrdersRef.current = wOrders; }, [wOrders]);
+  useEffect(() => {
+    const existing = mesaOrdersOf(wOrdersRef.current, mesa);
+    const lastNamed = [...existing].reverse().find(o=>o.customer_name);
+    setCustomerName(lastNamed?.customer_name || "");
+  }, [mesa]);
 
   // Realtime mesero — el mapa de mesas se actualiza solo
   useEffect(() => {
@@ -2031,6 +2072,9 @@ export default function App() {
               <button onClick={()=>{setWasteOrderCtx(null);setNewWaste({product_id:"",quantity:"1",reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
                 style={{...btn("rgba(198,40,40,0.1)",ALERT_RED),height:44,padding:"0 16px",fontSize:14,border:`1.5px solid ${ALERT_RED}44`}}>
                 🗑 Dar de baja
+              </button>
+              <button onClick={playBeep} style={{...btn(CREAM2,DARK),height:44,padding:"0 16px",fontSize:14}}>
+                🔊 Probar sonido
               </button>
               <button onClick={loadKitchen} style={{...btn(CREAM2,DARK),height:44,padding:"0 18px",fontSize:14}}>
                 {kLoading?"Cargando…":"↻ Actualizar"}
