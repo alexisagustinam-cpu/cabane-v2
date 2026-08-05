@@ -17,15 +17,21 @@ test("waiter validates fase 11 before creating an order and persists item statio
   assert.match(client, /Se requiere la migración Fase 11/);
 });
 
-test("station board filters its cards and updates only its own order items", () => {
-  assert.match(client, /filter\(i=>i\.station===station\)/);
-  assert.match(client, /from\("order_items"\)\.update\(\{item_status:status\}\)\.eq\("id",itemId\)\.eq\("station",station\)/);
-  assert.doesNotMatch(client, /async function stationItemUpdate[\s\S]*?from\("orders"\)\.update\(\{status[\s\S]*?async function loadInventory/);
+test("station board works by whole order within its own station", () => {
+  assert.match(client, /\.eq\("order_items\.station",station\)\.in\("order_items\.item_status",\["enviado","preparando"\]\)/);
+  assert.match(client, /function stationOrderUpdate\(orderId: string, station: Station, status: OrderItem\["item_status"\]\)/);
+  assert.match(client, /from\("order_items"\)\.update\(\{item_status:status\}\)\.eq\("order_id",orderId\)\.eq\("station",station\)/);
+  assert.match(client, /stationOrderUpdate\(o\.id,station/);
+  assert.doesNotMatch(client, /stationItemUpdate/);
 });
 
-test("menu uses compact tile controls for every visible product", () => {
-  assert.match(client, /className="product-grid product-tile-grid"/);
-  assert.match(client, /className="product-list-item product-tile"/);
+test("menu uses dense product rows with compact quantity controls and calm motion", () => {
+  assert.match(client, /className="product-grid product-row-grid"/);
+  assert.match(client, /className="product-list-item product-row"/);
+  assert.match(client, /Añadir/);
+  assert.doesNotMatch(client, /aspect-ratio:1\/1/);
+  assert.doesNotMatch(client, /button:not\(:disabled\):active\{transform:scale/);
+  assert.match(client, /prefers-reduced-motion:reduce/);
 });
 
 test("migration assigns bar categories, defaults unknown categories to kitchen, aggregates orders and scopes RLS", () => {

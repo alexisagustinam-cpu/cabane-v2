@@ -50,7 +50,7 @@ interface Product { id: string; name: string; category: string; price: number; d
 interface OrderItem { id: string; product_id: string; product_name: string; quantity: number; unit_price: number; notes?: string; station: Station; item_status: "enviado" | "preparando" | "listo" }
 interface Ingredient { id: string; name: string; unit: string; stock_current: number; stock_min: number }
 interface Recipe { id: string; product_id: string; ingredient_id: string; quantity: number }
-interface Order { id: string; order_number: number; table_label: string; status: FulfillmentStatus; payment_status: PaymentStatus; total: number; created_at: string; table_note?: string; customer_name?: string; order_items?: OrderItem[]; created_by?: string; creator_name?: string }
+interface Order { id: string; order_number: number; table_label: string; status: FulfillmentStatus; payment_status: PaymentStatus; total: number; created_at: string; table_released_at?: string|null; table_note?: string; customer_name?: string; order_items?: OrderItem[]; created_by?: string; creator_name?: string }
 interface CartItem extends Product { qty: number; notes: string[]; customNote: string }
 interface Waste { id: string; product_name: string; quantity: number; unit_price: number; reason: string; notes?: string; reporter_name?: string; created_at: string }
 interface Expense { id: string; category: string; description: string; amount: number; expense_date: string; creator_name?: string; created_at: string }
@@ -164,8 +164,7 @@ const GLOBAL_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;font-family:'Nunito',sans-serif;background:${CREAM}}
-button{cursor:pointer;border:none;font-family:'Nunito',sans-serif;transition:transform .1s,box-shadow .1s}
-button:not(:disabled):active{transform:scale(.97)}
+button{cursor:pointer;border:none;font-family:'Nunito',sans-serif;transition:background-color .15s,border-color .15s,color .15s,box-shadow .15s}
 input{font-family:'Nunito',sans-serif}
 input,select,textarea{min-width:0;max-width:100%;box-sizing:border-box}
 ::-webkit-scrollbar{width:4px;height:4px}
@@ -177,14 +176,19 @@ input,select,textarea{min-width:0;max-width:100%;box-sizing:border-box}
 /* Mapa de mesas: tarjetas más grandes en tablet/desktop, hover solo con mouse */
 .mesa-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 @media(min-width:700px){.mesa-grid{grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}}
-.mesa-card{transition:transform .15s,box-shadow .15s}
-@media(hover:hover){.mesa-card:hover{transform:translateY(-3px);box-shadow:0 12px 28px rgba(42,26,31,0.16)!important}}
+.mesa-card{transition:box-shadow .15s}
 
-/* Mesero: controles cuadrados para tocar rápido todo el menú durante el servicio. */
-.product-tile-grid{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px!important}
-.product-tile{min-height:126px!important;padding:10px!important;aspect-ratio:1/1}
-@media(min-width:768px){.product-tile-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important}.product-tile{min-height:145px!important}}
-@media(min-width:1200px){.product-tile-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important}}
+/* Mesero: grid estable. La información, el control y las notas nunca compiten por el mismo espacio. */
+.product-row-grid{display:grid!important;grid-template-columns:1fr;gap:8px!important}
+.product-row{display:grid!important;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:10px 12px;min-height:82px!important;padding:12px 14px!important}
+.product-row-main{min-width:0}
+.product-row-control{justify-self:end;align-self:center}
+.product-row-notes{grid-column:1/-1;min-width:0;border-top:1px solid ${BORDER};padding-top:10px}
+@media(min-width:900px){.product-row-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px!important}.product-row{min-height:88px!important}}
+@media(min-width:1400px){.product-row-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:480px){.product-row{grid-template-columns:1fr}.product-row-control{justify-self:start}.product-row-main p{white-space:normal!important}}
+@media(hover:hover){.mesa-card:hover{box-shadow:0 8px 20px rgba(42,26,31,0.12)!important}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 
 /* Admin: dos columnas en desktop (formularios a la izquierda, contenido a la derecha) */
 .admin-2col{display:block}
@@ -287,6 +291,8 @@ export default function App() {
   // Nunca se usa el estado antiguo como fallback de cobro: sin Fase 12 la
   // caja puede previsualizar pedidos, pero toda mutación de pago queda bloqueada.
   const [paymentSchemaReady, setPaymentSchemaReady] = useState(false);
+  // Fase 13 permite separar "pagada" de "mesa liberada" sin bloquear instalaciones antiguas.
+  const [tableReleaseSchemaReady, setTableReleaseSchemaReady] = useState(false);
   // Fase 3: mermas (productos dados de baja)
   const [wasteList, setWasteList] = useState<Waste[]>([]);
   const [wasteModal, setWasteModal] = useState(false);
@@ -529,14 +535,23 @@ export default function App() {
     });
   }
 
-  // Pedidos abiertos para el mapa de mesas del mesero
+  // Pedidos visibles para Mesero: pago no libera una mesa física; Fase 13 agrega la liberación explícita.
   const loadWaiterOrders = useCallback(async () => {
-    const { data, error } = await getDB().from("orders").select("*, order_items(*)")
-      .in("status",["enviado","preparando","listo"]).eq("payment_status","pending").order("created_at",{ascending:true});
-    // Fase 12 vuelve pago y preparación ciclos independientes: un pedido paid
-    // pertenece al historial aunque su preparación haya quedado como listo.
+    let query = getDB().from("orders").select("*, order_items(*)")
+      .in("status",["enviado","preparando","listo"]);
+    query = tableReleaseSchemaReady
+      ? query.is("table_released_at",null)
+      : query.eq("payment_status","pending");
+    const { data, error } = await query.order("created_at",{ascending:true});
     if (!error) setWOrders((data||[]) as Order[]);
-  }, []);
+  }, [tableReleaseSchemaReady]);
+
+  // Detectar Fase 13 sin romper instalaciones donde todavía no se aplicó.
+  useEffect(() => {
+    if (!profile) return;
+    getDB().from("orders").select("id,table_released_at").limit(1)
+      .then(({ error }: { error: { code?: string }|null }) => setTableReleaseSchemaReady(!error));
+  }, [profile]);
 
   useEffect(() => {
     if (screen==="waiter" && profile) {
@@ -611,7 +626,7 @@ export default function App() {
     setKLoading(true);
     const todayStart = new Date(); todayStart.setHours(0,0,0,0);
     const [{ data: orders }, { data: summaryItems }] = await Promise.all([
-      getDB().from("orders").select("*, order_items!inner(*)").eq("order_items.station",station).in("status",["enviado","preparando"]).order("created_at",{ascending:false}),
+      getDB().from("orders").select("*, order_items!inner(*)").eq("order_items.station",station).in("order_items.item_status",["enviado","preparando"]).in("status",["enviado","preparando"]).order("created_at",{ascending:false}),
       getDB().from("order_items").select("product_name,quantity,orders!inner(created_at,status)")
         .eq("station",station).neq("orders.status","cancelado").gte("orders.created_at",todayStart.toISOString()),
     ]);
@@ -1281,18 +1296,19 @@ export default function App() {
     });
   }
 
-  async function stationItemUpdate(itemId: string, station: Station, status: OrderItem["item_status"]) {
-    setUpdating(itemId);
-    // Sin fallback a orders: el trigger de Fase 11 calcula el agregado seguro.
-    const { error } = await getDB().from("order_items").update({item_status:status}).eq("id",itemId).eq("station",station);
+  async function stationOrderUpdate(orderId: string, station: Station, status: OrderItem["item_status"]) {
+    setUpdating(orderId);
+    // Una estación trabaja por pedido: el estado se aplica a todas sus líneas.
+    // El trigger de Fase 11 sigue calculando el estado agregado de la cabecera.
+    const { error } = await getDB().from("order_items").update({item_status:status}).eq("order_id",orderId).eq("station",station);
     if (error) {
-      setWasteMsg(`Error al actualizar ítem: ${error.message}. Se requiere la migración Fase 11.`);
+      setWasteMsg(`Error al actualizar pedido: ${error.message}. Se requiere la migración Fase 11.`);
       setUpdating(null);
       return;
     }
-    setKOrders(prev=>prev.map(o=>({...o,order_items:(o.order_items||[])
-      .map(i=>i.id===itemId?{...i,item_status:status}:i)
-      .filter(i=>i.item_status!=="listo")})).filter(o=>(o.order_items||[]).length>0));
+    setKOrders(prev=>prev.map(o=>o.id!==orderId ? o : ({...o,order_items:(o.order_items||[])
+      .map(i=>i.station===station?{...i,item_status:status}:i)}))
+      .filter(o=>(o.order_items||[]).some(i=>i.station===station && i.item_status!=="listo")));
     setUpdating(null);
   }
 
@@ -1533,11 +1549,31 @@ export default function App() {
     }
   }
 
+  async function releaseTable(tableLabel: string) {
+    if (!tableReleaseSchemaReady) {
+      setSentMsg("Para liberar mesas falta aplicar Fase 13 en Supabase.");
+      return;
+    }
+    const { error } = await getDB().from("orders").update({table_released_at:new Date().toISOString()})
+      .eq("table_label",tableLabel).is("table_released_at",null).eq("payment_status","paid").eq("status","listo");
+    if (error) {
+      setSentMsg(`No se pudo liberar ${tableLabel}: ${error.message}`);
+      return;
+    }
+    setWOrders(prev=>prev.filter(o=>o.table_label!==tableLabel));
+    setSentMsg(`${tableLabel} quedó libre para atender un nuevo cliente.`);
+    setTimeout(()=>setSentMsg(""),5000);
+  }
+
   // Mapa de mesas (compartido entre mesero y caja) — declarada antes del
   // guard de hidratación de abajo porque algunos useEffect (registrados
-  // Mapa de mesas compartido: un pedido cobrado queda en historial, no ocupa mesa.
-  const mesaOrdersOf = (orders: Order[], m: string) =>
-    orders.filter(o=>o.table_label===m && o.status!=="cancelado" && o.payment_status!=="paid");
+  // Mesas físicas quedan ocupadas hasta liberación explícita. Para llevar/Delivery
+  // no consumen una mesa y desaparecen al estar pagados y listos.
+  const mesaOrdersOf = (orders: Order[], m: string) => {
+    const isNonTableService = /llevar|delivery|domicilio/i.test(m);
+    return orders.filter(o=>o.table_label===m && o.status!=="cancelado" && !o.table_released_at
+      && !(isNonTableService && o.payment_status==="paid" && o.status==="listo"));
+  };
 
   if (!ok) return null;
 
@@ -1610,15 +1646,20 @@ export default function App() {
       {mesasList.map(m=>{
         const mo = mesaOrdersOf(orders, m);
         const libre = mo.length===0;
+        const isLlevar = /llevar/i.test(m), isDelivery = /delivery|domicilio/i.test(m);
+        const isPhysicalTable = !isLlevar && !isDelivery;
+        const allPaid = !libre && mo.every(o=>o.payment_status==="paid");
         const allListo = !libre && mo.every(o=>o.status==="listo");
         const total = mo.reduce((s,o)=>s+o.total,0);
         const isSel = selected===m;
-        const stateColor = libre ? "#C9B99F" : allListo ? GREEN : GOLD;
-        const stateText  = libre ? "#A08D75" : allListo ? GREEN : "#8A6210";
-        const hasPaidPreparing = mo.some(o=>o.payment_status==="paid" && o.status!=="listo");
-        const stateLabel = libre ? "Libre" : hasPaidPreparing ? "Pagado · en preparación" : allListo ? "Listo para entregar" : "En preparación";
+        const stateColor = libre ? "#C9B99F" : allPaid ? GREEN : allListo ? GREEN : GOLD;
+        const stateText  = libre ? "#A08D75" : allPaid ? GREEN : allListo ? GREEN : "#8A6210";
+        const stateLabel = libre ? "Libre"
+          : isPhysicalTable && allPaid && allListo ? "Pagada · ocupada"
+          : allPaid ? "Pagada · en preparación"
+          : allListo ? "Listo para entregar"
+          : "En preparación";
         const oldest = mo.length ? mo.reduce((a,b)=>new Date(a.created_at)<new Date(b.created_at)?a:b) : null;
-        const isLlevar = /llevar/i.test(m), isDelivery = /delivery|domicilio/i.test(m);
         void tick; // el tiempo de espera se refresca cada minuto
         return (
           <button key={m} onClick={()=>onPick(m)} className="mesa-card" style={{
@@ -1653,7 +1694,6 @@ export default function App() {
             </div>
 
             <p style={{fontSize:17,fontWeight:900,color:libre?"#8F7E66":DARK,letterSpacing:"-0.01em",marginBottom:3}}>{m}</p>
-            {isLlevar && <p style={{fontSize:11,fontWeight:800,color:MUTED,marginBottom:4}}>Se puede cobrar antes de terminar la preparación</p>}
 
             {libre ? (
               <p style={{fontSize:12,fontWeight:600,color:"#B3A184"}}>Disponible</p>
@@ -1840,12 +1880,7 @@ export default function App() {
               .waiter-wrap{display:grid!important;grid-template-columns:300px 1fr;min-height:calc(100vh - 56px)}
               .mobile-cart-bar{display:none!important}
               .waiter-sidebar{display:flex!important;height:calc(100vh - 56px);overflow-y:auto;position:sticky;top:56px}
-              .product-list-item{flex-direction:row!important}
               .mesa-chips-row{display:none!important}
-              .product-grid{display:grid!important;grid-template-columns:repeat(2,1fr)!important;gap:10px!important}
-            }
-            @media(min-width:1200px){
-              .product-grid{grid-template-columns:repeat(3,1fr)!important}
             }
           `}</style>
           <div className="waiter-wrap" style={{display:"block",flex:1}}>
@@ -1929,7 +1964,9 @@ export default function App() {
                 {/* Previsualización de lo ya pedido en esta mesa — para no duplicar */}
                 {showMesaPreview && (()=>{
                   const existing = mesaOrdersOf(wOrders, mesa);
-                  const statusLabel: Record<string,string> = { enviado:"Nuevo", preparando:"En cocina", listo:"Listo para cobrar" };
+                  const statusLabel: Record<string,string> = { enviado:"Nuevo", preparando:"En preparación", listo:"Listo para entregar" };
+                  const physicalTable = !/llevar|delivery|domicilio/i.test(mesa);
+                  const canRelease = physicalTable && existing.length>0 && existing.every(o=>o.payment_status==="paid" && o.status==="listo");
                   return existing.length>0 ? (
                     <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,padding:"10px 12px",marginBottom:10,display:"flex",flexDirection:"column" as const,gap:10}}>
                       {existing.map(o=>(
@@ -1946,6 +1983,12 @@ export default function App() {
                           {!(o.order_items||[]).length && <p style={{fontSize:12,color:MUTED,fontWeight:600,paddingLeft:4}}>Sin detalle de items</p>}
                         </div>
                       ))}
+                      {canRelease && (
+                        <button onClick={()=>askConfirm(`¿Liberar ${mesa}? La mesa quedará disponible para un nuevo cliente.`,()=>releaseTable(mesa))}
+                          style={{...btn(GREEN,"#fff"),width:"100%",height:42,fontSize:13}}>
+                          Liberar mesa
+                        </button>
+                      )}
                     </div>
                   ) : null;
                 })()}
@@ -1992,68 +2035,61 @@ export default function App() {
                 </div>
               )}
 
-              {/* Product list — vertical en móvil, grid en desktop */}
-              <div className="product-grid product-tile-grid" style={{padding:"12px 12px 0",display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8}}>
+              {/* Productos: filas compactas y escaneables, no mosaicos cuadrados. */}
+              <div className="product-grid product-row-grid" style={{padding:"12px 16px 0",display:"grid",gridTemplateColumns:"1fr",gap:8}}>
                 {visProd.map(p=>{
                   const qty=cart[p.id]?.qty||0;
                   return (
-                    <div key={p.id} className="product-list-item product-tile" style={{
-                      background:qty>0?"#fff":"#fff",
-                      borderRadius:16,
-                      border:qty>0?`2px solid ${RED}`:`1px solid ${BORDER}`,
-                      padding:"14px 14px",
-                      display:"flex",
-                      flexDirection:"column" as const,
-                      gap:10,
-                      boxShadow:qty>0?`0 4px 20px rgba(225,59,45,0.12)`:`0 1px 4px rgba(0,0,0,0.06)`,
-                      transition:"all .15s"}}>
+                    <div key={p.id} className="product-list-item product-row" style={{
+                      background:qty>0?"#FFFDFC":"#fff",
+                      borderRadius:14,
+                      border:qty>0?`1.5px solid ${RED}`:`1px solid ${BORDER}`,
+                      display:"flex",flexDirection:"column" as const,gap:8,
+                      boxShadow:qty>0?`0 3px 12px rgba(122,30,58,0.10)`:`0 1px 3px rgba(0,0,0,0.04)`}}>
 
-                      {/* Top row: name + price + add button */}
-                      <div style={{display:"flex",alignItems:"center",gap:12}}>
+                      <div className="product-row-main" style={{minWidth:0}}>
                         <div style={{flex:1,minWidth:0}}>
-                          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
-                            <p style={{fontSize:17,fontWeight:800,color:DARK,lineHeight:1.2}}>{p.name}</p>
+                          <div style={{display:"flex",alignItems:"baseline",gap:8,minWidth:0}}>
+                            <p style={{fontSize:16,fontWeight:900,color:DARK,lineHeight:1.15,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" as const}}>{p.name}</p>
+                            <span style={{fontSize:14,fontWeight:900,color:RED,whiteSpace:"nowrap" as const}}>{$(p.price)}</span>
                             {p.description && (
-                              <button onClick={()=>setExpandedDesc(expandedDesc===p.id?null:p.id)}
-                                style={{flexShrink:0,width:20,height:20,borderRadius:"50%",background:CREAM2,border:"none",
-                                  cursor:"pointer",fontSize:11,fontWeight:900,color:MUTED,fontFamily:FONT,
+                              <button aria-label={`Ver detalle de ${p.name}`} onClick={()=>setExpandedDesc(expandedDesc===p.id?null:p.id)}
+                                style={{flexShrink:0,width:22,height:22,borderRadius:"50%",background:CREAM2,border:`1px solid ${BORDER}`,
+                                  cursor:"pointer",fontSize:12,fontWeight:900,color:MUTED,fontFamily:FONT,
                                   display:"flex",alignItems:"center",justifyContent:"center"}}>
-                                ?
+                                i
                               </button>
                             )}
                           </div>
+                          {p.description && expandedDesc!==p.id && (
+                            <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:4,lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" as const}}>{p.description}</p>
+                          )}
                           {expandedDesc===p.id && p.description && (
-                            <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:4,lineHeight:1.4}}>{p.description}</p>
+                            <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:5,lineHeight:1.4}}>{p.description}</p>
                           )}
-                          <p style={{fontSize:20,fontWeight:900,color:RED,lineHeight:1}}>{$(p.price)}</p>
-                        </div>
-
-                        {/* Controls */}
-                        <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
-                          {qty>0 && (
-                            <>
-                              <button onClick={()=>changeQty(p.id,-1)} style={{
-                                width:52,height:52,borderRadius:14,fontSize:24,fontWeight:900,
-                                background:CREAM2,color:DARK,border:"none",cursor:"pointer",fontFamily:FONT,
-                                display:"flex",alignItems:"center",justifyContent:"center"}}>
-                                −
-                              </button>
-                              <span style={{fontSize:20,fontWeight:900,color:DARK,minWidth:28,textAlign:"center" as const}}>{qty}</span>
-                            </>
-                          )}
-                          <button onClick={()=>changeQty(p.id,1)} style={{
-                            width:62,height:62,borderRadius:16,fontSize:28,fontWeight:900,
-                            background:qty>0?RED:DARK,color:"#fff",border:"none",cursor:"pointer",fontFamily:FONT,
-                            display:"flex",alignItems:"center",justifyContent:"center",
-                            boxShadow:qty>0?`0 4px 14px rgba(225,59,45,0.4)`:`0 4px 14px rgba(23,18,15,0.2)`}}>
-                            {qty>0?"+":"＋"}
-                          </button>
                         </div>
                       </div>
 
-                      {/* Notes — only when product is in cart */}
+                      <div className="product-row-control">
+                        {qty===0 ? (
+                          <button aria-label={`Añadir ${p.name}`} onClick={()=>changeQty(p.id,1)} style={{
+                            height:40,minWidth:88,padding:"0 14px",borderRadius:10,fontSize:13,fontWeight:900,
+                            background:DARK,color:"#fff",border:"none",cursor:"pointer",fontFamily:FONT,
+                            display:"flex",alignItems:"center",justifyContent:"center",gap:6,flexShrink:0}}>
+                            <span style={{fontSize:18,lineHeight:1}}>+</span> Añadir
+                          </button>
+                        ) : (
+                          <div aria-label={`${qty} ${p.name} en el pedido`} style={{display:"flex",alignItems:"center",height:40,borderRadius:10,overflow:"hidden",border:`1.5px solid ${RED}`,flexShrink:0,background:"#fff"}}>
+                            <button aria-label={`Quitar ${p.name}`} onClick={()=>changeQty(p.id,-1)} style={{width:38,height:"100%",fontSize:20,fontWeight:900,background:"transparent",color:RED,border:"none",cursor:"pointer",fontFamily:FONT}}>−</button>
+                            <span style={{fontSize:15,fontWeight:900,color:DARK,minWidth:28,textAlign:"center" as const}}>{qty}</span>
+                            <button aria-label={`Añadir otro ${p.name}`} onClick={()=>changeQty(p.id,1)} style={{width:38,height:"100%",fontSize:20,fontWeight:900,background:RED,color:"#fff",border:"none",cursor:"pointer",fontFamily:FONT}}>+</button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Notes — always own grid row; cannot overlap information or controls. */}
                       {qty>0 && (
-                        <div style={{borderTop:`1px solid ${BORDER}`,paddingTop:10}}>
+                        <div className="product-row-notes">
                           {/* Quick note chips */}
                           <div style={{display:"flex",gap:6,flexWrap:"wrap" as const,marginBottom:8}}>
                             {(notesBycat[p.category]||[]).map(({note:n})=>{
@@ -2109,6 +2145,8 @@ export default function App() {
       {(screen==="kitchen" || screen==="bar") && (() => {
         const station: Station = screen==="bar" ? "bar" : "kitchen";
         const stationLabel = station==="bar" ? "Barra" : "Cocina";
+        // Barra es un flujo rápido: entra pendiente y se marca lista en un toque.
+        const stationCompletesDirectly = station==="bar";
         return (
         <div style={{padding:16,maxWidth:1100,margin:"0 auto",width:"100%"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap" as const,gap:10}}>
@@ -2159,8 +2197,8 @@ export default function App() {
           {/* Status counters */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:20}}>
             {[
-              {label:"Nuevos",status:"enviado",count:kOrders.flatMap(o=>o.order_items||[]).filter(i=>i.item_status==="enviado").length,bg:RED,fg:"#fff"},
-              {label:"Preparando",status:"preparando",count:kOrders.flatMap(o=>o.order_items||[]).filter(i=>i.item_status==="preparando").length,bg:GOLD,fg:DARK},
+              {label:"Nuevos",status:"enviado",count:kOrders.filter(o=>(o.order_items||[]).some(i=>i.item_status==="enviado")).length,bg:RED,fg:"#fff"},
+              {label:"Preparando",status:"preparando",count:kOrders.filter(o=>(o.order_items||[]).some(i=>i.item_status==="preparando")).length,bg:GOLD,fg:DARK},
             ].map(({label,count,bg,fg})=>(
               <div key={label} style={{background:bg,borderRadius:14,padding:"14px 10px",textAlign:"center" as const,boxShadow:`0 4px 16px ${bg}44`}}>
                 <p style={{fontSize:36,fontWeight:900,color:fg,lineHeight:1}}>{count}</p>
@@ -2213,9 +2251,12 @@ export default function App() {
                 const time=new Date(o.created_at).toLocaleTimeString("es-EC",{hour:"2-digit",minute:"2-digit"});
                 const mins=Math.floor((Date.now()-new Date(o.created_at).getTime())/60000);
                 void tick;
+                const stationItems = (o.order_items||[]).filter(i=>i.station===station);
+                const stationStatus: OrderItem["item_status"] = stationItems.some(i=>i.item_status==="preparando") ? "preparando" : "enviado";
+                const stationBusy = updating===o.id;
                 return (
                   <div key={o.id} style={{...card,padding:16,
-                    border:o.status==="enviado"?`2px solid ${RED}`:o.status==="listo"?`2px solid ${GREEN}`:`1px solid ${BORDER}`,
+                    border:stationStatus==="enviado"?`2px solid ${RED}`:`1px solid ${BORDER}`,
                     borderLeft:`6px solid ${kitchenTimeColor(mins)}`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
                       <div>
@@ -2223,19 +2264,15 @@ export default function App() {
                         <p style={{fontSize:22,fontWeight:900,color:DARK}}>{o.table_label}{o.customer_name?<span style={{fontSize:15,fontWeight:800,color:MUTED}}> · {o.customer_name}</span>:null}</p>
                         {o.table_note && <p style={{fontSize:12,fontWeight:700,color:DARK,background:GOLD,borderRadius:6,padding:"3px 8px",marginTop:4,display:"inline-block"}}>Nota mesa: {o.table_note}</p>}
                       </div>
-                      <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Prep.":"Listo"}</span>
+                      <span style={badge(stationStatus)}>{stationStatus==="enviado"?"Nuevo":"Preparando"}</span>
                     </div>
                     <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
-                      {(o.order_items||[]).filter(i=>i.station===station).map(i=>(
+                      {stationItems.map(i=>(
                         <div key={i.id} style={{background:CREAM,borderRadius:8,padding:"8px 12px"}}>
                           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,fontSize:14,fontWeight:700,color:DARK}}>
                             <span>{i.quantity}× {i.product_name}</span>
                             <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
                               <span style={{fontWeight:800}}>{$(i.quantity*i.unit_price)}</span>
-                              {i.item_status!=="listo" && <button disabled={updating===i.id} onClick={()=>stationItemUpdate(i.id,station,i.item_status==="enviado"?"preparando":"listo")}
-                                style={{...btn(i.item_status==="enviado"?GOLD:GREEN,"#fff",updating===i.id),height:30,minHeight:30,padding:"0 9px",fontSize:11}}>
-                                {updating===i.id?"…":i.item_status==="enviado"?"Preparar":"Listo"}
-                              </button>}
                               {i.product_id && (
                                 <button title="Se quemó / cayó / etc. — dar de baja este producto"
                                   onClick={()=>{setWasteOrderCtx(o);setNewWaste({product_id:i.product_id,quantity:String(i.quantity),reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
@@ -2257,7 +2294,10 @@ export default function App() {
                       <span style={{fontSize:13,color:"rgba(255,255,255,0.45)",fontWeight:600}}>Total pedido</span>
                       <span style={{fontSize:20,fontWeight:900,color:GOLD}}>{$(o.total)}</span>
                     </div>
-                    <p style={{fontSize:11,fontWeight:700,color:MUTED}}>Actualiza cada ítem de {stationLabel.toLowerCase()} por separado.</p>
+                    <button disabled={stationBusy} onClick={()=>stationOrderUpdate(o.id,station,stationCompletesDirectly?"listo":stationStatus==="enviado"?"preparando":"listo")}
+                      style={{...btn(stationCompletesDirectly||stationStatus==="preparando"?GREEN:GOLD,"#fff",stationBusy),width:"100%",height:46,fontSize:14}}>
+                      {stationBusy?"Actualizando…":stationCompletesDirectly?"Marcar barra lista":stationStatus==="enviado"?"Marcar cocina preparando":"Marcar cocina lista"}
+                    </button>
                   </div>
                 );
               })}
@@ -3904,7 +3944,6 @@ export default function App() {
         if (!orders.length) return null;
         const total = orders.reduce((s,o)=>s+o.total,0);
         const pendingOrders = orders.filter(o=>o.payment_status==="pending" && o.status!=="cancelado");
-        const allListo = pendingOrders.length>0 && pendingOrders.every(o=>o.status==="listo");
         const methodLabels={efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia"};
         const methodBg={efectivo:DARK,tarjeta:RED,transferencia:GOLD};
         const methodFg={efectivo:"#fff",tarjeta:"#fff",transferencia:DARK};
@@ -3928,8 +3967,8 @@ export default function App() {
                 <span style={{fontSize:24,fontWeight:900,color:GOLD}}>{$(total)}</span>
               </div>
 
-              {/* Cobrar todo junto solo a pedidos pendientes, listos y sin cobro parcial. */}
-              {pendingOrders.length>1 && allListo && !pendingOrders.some(o=>partiallyPaidOrders.has(o.id)) && (
+              {/* Cobrar toda la mesa: pago es independiente de preparación. */}
+              {pendingOrders.length>1 && !pendingOrders.some(o=>partiallyPaidOrders.has(o.id)) && (
                 <div style={{marginBottom:18,paddingBottom:16,borderBottom:`1.5px dashed ${BORDER}`}}>
                   <p style={{fontSize:13,fontWeight:700,color:DARK,marginBottom:10}}>Cobrar mesa completa — ¿con qué método?</p>
                   <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
@@ -3950,8 +3989,8 @@ export default function App() {
                   const isListo = o.status==="listo";
                   const busy = paying===o.id;
                   const hasPartial = partiallyPaidOrders.has(o.id);
-                  const canPay = paymentSchemaReady && o.payment_status==="pending" && isListo && !hasPartial;
-                  const canPayPerPerson = paymentSchemaReady && o.payment_status==="pending" && isListo;
+                  const canPay = paymentSchemaReady && o.payment_status==="pending" && !hasPartial;
+                  const canPayPerPerson = paymentSchemaReady && o.payment_status==="pending";
                   const expanded = expandedOrder===o.id;
                   return (
                     <div key={o.id} style={{background:CREAM,borderRadius:12,padding:"12px 14px"}}>
@@ -3985,26 +4024,29 @@ export default function App() {
                       )}
 
                       {!paymentSchemaReady && <p style={{fontSize:12,color:ALERT_RED,fontWeight:700,marginBottom:8,background:"#fff",borderRadius:8,padding:"6px 10px"}}>Vista previa segura: no se puede cobrar hasta aplicar Fase 12</p>}
-                      {paymentSchemaReady && !isListo && <p style={{fontSize:12,color:MUTED,fontWeight:600,marginBottom:8,background:"#fff",borderRadius:8,padding:"6px 10px"}}>Esperando que cocina marque como Listo</p>}
-                      {paymentSchemaReady && isListo && hasPartial && <p style={{fontSize:12,color:"#8A6210",fontWeight:700,marginBottom:8,background:"#FFF6DD",borderRadius:8,padding:"6px 10px"}}>Ya tiene cobros parciales por persona — seguí cobrando con &quot;Por persona&quot; hasta cubrir todo.</p>}
-                      <div style={{display:"flex",gap:6,flexWrap:"wrap" as const}}>
+                      {paymentSchemaReady && !isListo && <p style={{fontSize:12,color:MUTED,fontWeight:600,marginBottom:8,background:"#fff",borderRadius:8,padding:"6px 10px"}}>Preparación en curso — el cobro ya se puede registrar.</p>}
+                      {paymentSchemaReady && hasPartial && <p style={{fontSize:12,color:"#8A6210",fontWeight:700,marginBottom:8,background:"#FFF6DD",borderRadius:8,padding:"6px 10px"}}>Ya tiene cobros parciales por persona — seguí cobrando con &quot;Por persona&quot; hasta cubrir todo.</p>}
+                      <p style={{fontSize:11,fontWeight:800,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:7}}>Método de pago</p>
+                      <div className="payment-method-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:7,marginBottom:9}}>
                         {(["efectivo","tarjeta","transferencia"] as const).map(m=>(
                           <button key={m} disabled={!canPay||busy} onClick={()=>cobrar(o.id,m,o.total)}
-                            style={{...btn(methodBg[m],methodFg[m],!canPay||busy),flex:1,minWidth:90,height:44,fontSize:12}}>
-                            {busy?"…":`Cobrar ahora · ${methodLabels[m]}`}
+                            style={{...btn(methodBg[m],methodFg[m],!canPay||busy),padding:"0 8px",minWidth:0,height:44,fontSize:12}}>
+                            {busy?"…":methodLabels[m]}
                           </button>
                         ))}
+                      </div>
+                      <div className="order-service-actions" style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:7}}>
                         <button disabled={!canPay||busy} onClick={()=>{setSplitModal(o);setSplitAmounts({efectivo:"",tarjeta:"",transferencia:""});}}
-                          style={{...btn(CREAM2,DARK,!canPay||busy),flex:1,minWidth:80,height:44,fontSize:12,border:`1px solid ${BORDER}`}}>
-                          Dividir
+                          style={{...btn(CREAM2,DARK,!canPay||busy),padding:"0 8px",minWidth:0,height:40,fontSize:11,border:`1px solid ${BORDER}`}}>
+                          Dividir pago
                         </button>
                         <button disabled={!canPayPerPerson||busy} onClick={()=>openItemPayModal(o)}
-                          style={{...btn(CREAM2,DARK,!canPayPerPerson||busy),flex:1,minWidth:100,height:44,fontSize:12,border:`1px solid ${BORDER}`}}>
-                          Por persona
+                          style={{...btn(CREAM2,DARK,!canPayPerPerson||busy),padding:"0 8px",minWidth:0,height:40,fontSize:11,border:`1px solid ${BORDER}`}}>
+                          Por consumo
                         </button>
                         <button disabled={busy} onClick={()=>setMoveOrder(o)}
-                          style={{...btn(CREAM2,DARK,busy),minWidth:76,height:44,fontSize:12,border:`1px solid ${BORDER}`}}>
-                          Mover ⇄
+                          style={{...btn(CREAM2,DARK,busy),padding:"0 8px",minWidth:0,height:40,fontSize:11,border:`1px solid ${BORDER}`}}>
+                          Mover
                         </button>
                       </div>
                     </div>
@@ -4239,7 +4281,7 @@ export default function App() {
               style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${customerName.trim()?BORDER:RED}`,
                 fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none",marginBottom:!customerName.trim()?4:10}}/>
             {!customerName.trim() && (
-              <p style={{fontSize:12,fontWeight:700,color:RED,marginBottom:8}}>Anotá el nombre del cliente para poder enviar a cocina</p>
+              <p style={{fontSize:12,fontWeight:700,color:RED,marginBottom:8}}>Anotá el nombre del cliente para poder enviar el pedido</p>
             )}
 
             <input type="text" placeholder="Nota de mesa (opcional) — ej: alérgico al gluten, misma cuenta…"
@@ -4251,7 +4293,7 @@ export default function App() {
               <button onClick={()=>setModal(false)} style={{...btn(CREAM2,DARK),height:52}}>Editar</button>
               <button disabled={sending||!customerName.trim()||cartItems.length===0} onClick={sendToKitchen}
                 style={{...btn(RED,"#fff",sending||!customerName.trim()||cartItems.length===0),height:52,fontSize:16,fontWeight:800}}>
-                {sending?"Enviando…":"Enviar a cocina"}
+                {sending?"Enviando…":"Enviar pedido"}
               </button>
             </div>
           </div>

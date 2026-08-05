@@ -9,8 +9,10 @@ test("payment is a lifecycle independent from fulfillment in the client", () => 
   assert.match(client, /type FulfillmentStatus = "enviado" \| "preparando" \| "listo" \| "cancelado"/);
   assert.match(client, /type PaymentStatus = "pending" \| "paid"/);
   assert.match(client, /payment_status: PaymentStatus/);
-  assert.match(client, /const canPay = paymentSchemaReady && o\.payment_status==="pending" && isListo && !hasPartial/);
-  assert.match(client, /Cobrar ahora/);
+  assert.match(client, /const canPay = paymentSchemaReady && o\.payment_status==="pending" && !hasPartial/);
+  assert.match(client, /const canPayPerPerson = paymentSchemaReady && o\.payment_status==="pending"/);
+  assert.match(client, /pendingOrders.length>1 && !pendingOrders\.some/);
+  assert.match(client, /className="payment-method-grid"/);
   assert.match(client, /Pagado · en preparación/);
   assert.match(client, /Pagado · listo para entregar/);
   assert.doesNotMatch(client, /payOrder[\s\S]{0,1800}update\(\{status:\"pagado"\}\)/);
@@ -27,9 +29,11 @@ test("paid fulfillment status renders safely until Fase 12 migrates it", () => {
   assert.match(client, /const colors = m\[s\] \|\| m\.listo/);
 });
 
-test("waiter excludes paid orders from operational tables after Fase 12", () => {
-  assert.match(client, /\.in\("status",\["enviado","preparando","listo"\]\)\.eq\("payment_status","pending"\)/);
-  assert.match(client, /\["enviado","preparando","listo"\]\.includes\(o\.status\) && o\.payment_status !== "paid"/);
+test("waiter keeps physical tables visible until explicit release", () => {
+  assert.match(client, /query\.is\("table_released_at",null\)/);
+  assert.match(client, /tableReleaseSchemaReady/);
+  assert.match(client, /!o\.table_released_at/);
+  assert.match(client, /Liberar mesa/);
 });
 
 test("Fase 12 migration is present, idempotent, migrates legacy data, and preserves Fase 11 aggregation", () => {
