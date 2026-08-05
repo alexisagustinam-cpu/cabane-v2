@@ -16,3 +16,7 @@ test("takeaway and delivery are not described as occupied tables", () => {
   assert.match(client, /const isPhysicalTable = !isLlevar && !isDelivery/);
   assert.doesNotMatch(client, /Se puede cobrar antes de terminar la preparación/);
 });
+
+test("paid occupied tables do not render a preparation timer from historical order creation", () => {
+  assert.match(client, /!allPaid && oldest/);
+});

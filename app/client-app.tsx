@@ -1708,7 +1708,7 @@ export default function App() {
               <>
                 <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8,flexWrap:"wrap" as const}}>
                   <span style={{fontSize:20,fontWeight:900,color:DARK,lineHeight:1}}>{$(total)}</span>
-                  {oldest && <span style={{fontSize:11,fontWeight:700,color:kitchenTimeColor(Math.floor((Date.now()-new Date(oldest.created_at).getTime())/60000))}}>⏱ {elapsed(oldest.created_at)}</span>}
+                  {!allPaid && oldest && <span style={{fontSize:11,fontWeight:700,color:kitchenTimeColor(Math.floor((Date.now()-new Date(oldest.created_at).getTime())/60000))}}>⏱ {elapsed(oldest.created_at)}</span>}
                 </div>
                 <div style={{display:"flex",gap:4,flexWrap:"wrap" as const}}>
                   {mo.slice(0,3).map(o=>(
