@@ -16,4 +16,4 @@ set table_released_at = now()
 where table_released_at is null
   and payment_status = 'paid'
   and status = 'listo'
-  and created_at < ((now() at time zone 'America/Guayaquil')::date at time zone 'America/Guayaquil');
+  and (created_at at time zone 'America/Guayaquil')::date < (now() at time zone 'America/Guayaquil')::date;
