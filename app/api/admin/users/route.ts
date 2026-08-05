@@ -4,7 +4,7 @@
 
 import { requireAdmin } from "../_shared";
 
-const VALID_ROLES = ["waiter", "kitchen", "cashier", "admin"];
+const VALID_ROLES = ["waiter", "kitchen", "bar", "cashier", "admin"];
 
 function invalidRoles(roles: unknown): string | null {
   if (!Array.isArray(roles) || roles.length === 0) return "Falta al menos un rol";

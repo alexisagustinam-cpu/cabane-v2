@@ -41,14 +41,16 @@ async function adminFetch(input: string, init: RequestInit): Promise<Response> {
   return response;
 }
 
-type Role = "waiter" | "kitchen" | "cashier" | "admin";
-type Status = "enviado" | "preparando" | "listo" | "pagado" | "cancelado";
+type Role = "waiter" | "kitchen" | "bar" | "cashier" | "admin";
+type FulfillmentStatus = "enviado" | "preparando" | "listo" | "cancelado";
+type PaymentStatus = "pending" | "paid";
+type Station = "kitchen" | "bar";
 interface Profile { id: string; name: string; roles: Role[]; email?: string }
 interface Product { id: string; name: string; category: string; price: number; description?: string }
-interface OrderItem { id: string; product_id: string; product_name: string; quantity: number; unit_price: number; notes?: string }
+interface OrderItem { id: string; product_id: string; product_name: string; quantity: number; unit_price: number; notes?: string; station: Station; item_status: "enviado" | "preparando" | "listo" }
 interface Ingredient { id: string; name: string; unit: string; stock_current: number; stock_min: number }
 interface Recipe { id: string; product_id: string; ingredient_id: string; quantity: number }
-interface Order { id: string; order_number: number; table_label: string; status: Status; total: number; created_at: string; table_note?: string; customer_name?: string; order_items?: OrderItem[]; created_by?: string; creator_name?: string }
+interface Order { id: string; order_number: number; table_label: string; status: FulfillmentStatus; payment_status: PaymentStatus; total: number; created_at: string; table_note?: string; customer_name?: string; order_items?: OrderItem[]; created_by?: string; creator_name?: string }
 interface CartItem extends Product { qty: number; notes: string[]; customNote: string }
 interface Waste { id: string; product_name: string; quantity: number; unit_price: number; reason: string; notes?: string; reporter_name?: string; created_at: string }
 interface Expense { id: string; category: string; description: string; amount: number; expense_date: string; creator_name?: string; created_at: string }
@@ -130,6 +132,10 @@ function downloadCSV(filename: string, rows: (string|number)[][]) {
 }
 const MESAS = ["Mesa 0","Mesa 1","Mesa 2","Mesa 3","Mesa 4","Mesa 5","Mesa 6","Mesa 7","Mesa 8","Mesa 9","Para llevar","Delivery"];
 const CAT_ORDER = ["Sánduches","Desayunos","Clásicos","Ensaladas","Tablitas","Para Compartir","Bebidas","Cafés","Postres"];
+const BAR_CATEGORIES = ["Bebidas", "Cafés", "Postres"];
+function stationForCategory(category: string): Station {
+  return BAR_CATEGORIES.includes(category) ? "bar" : "kitchen";
+}
 // Fecha local YYYY-MM-DD (toISOString daría la fecha UTC, que cambia a las 19h en Ecuador)
 function localDateStr(): string {
   const d = new Date();
@@ -138,9 +144,9 @@ function localDateStr(): string {
 const STAFF_REASON = "Consumo de personal";
 const WASTE_REASONS = ["Se quemó","Se cayó","Mal preparado","Devuelto por cliente","Caducado",STAFF_REASON,"Otro"];
 const EXPENSE_CATS = ["Compras / Insumos","Alquiler","Servicios (luz, agua, internet)","Sueldos","Mantenimiento","Otros"];
-const ROLE_SCREENS: Record<Role, string[]> = { waiter:["waiter"], kitchen:["kitchen"], cashier:["cashier"], admin:["waiter","kitchen","cashier","admin"] };
-const SL: Record<string,string> = { waiter:"Mesero", kitchen:"Cocina", cashier:"Caja", admin:"Admin" };
-const ROLE_ORDER: Role[] = ["waiter","kitchen","cashier","admin"];
+const ROLE_SCREENS: Record<Role, string[]> = { waiter:["waiter"], kitchen:["kitchen"], bar:["bar"], cashier:["cashier"], admin:["waiter","kitchen","bar","cashier","admin"] };
+const SL: Record<string,string> = { waiter:"Mesero", kitchen:"Cocina", bar:"Barra", cashier:"Caja", admin:"Admin" };
+const ROLE_ORDER: Role[] = ["waiter","kitchen","bar","cashier","admin"];
 // Un usuario ve la unión de las pantallas de todos sus roles (admin ya incluía las 4)
 function screensForRoles(roles: Role[]): string[] {
   if (roles.includes("admin")) return ROLE_SCREENS.admin;
@@ -173,6 +179,12 @@ input,select,textarea{min-width:0;max-width:100%;box-sizing:border-box}
 @media(min-width:700px){.mesa-grid{grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}}
 .mesa-card{transition:transform .15s,box-shadow .15s}
 @media(hover:hover){.mesa-card:hover{transform:translateY(-3px);box-shadow:0 12px 28px rgba(42,26,31,0.16)!important}}
+
+/* Mesero: controles cuadrados para tocar rápido todo el menú durante el servicio. */
+.product-tile-grid{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px!important}
+.product-tile{min-height:126px!important;padding:10px!important;aspect-ratio:1/1}
+@media(min-width:768px){.product-tile-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important}.product-tile{min-height:145px!important}}
+@media(min-width:1200px){.product-tile-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important}}
 
 /* Admin: dos columnas en desktop (formularios a la izquierda, contenido a la derecha) */
 .admin-2col{display:block}
@@ -272,6 +284,9 @@ export default function App() {
   const [cashierMesa, setCashierMesa] = useState<string|null>(null);
   const [payModalMesa, setPayModalMesa] = useState<string|null>(null);
   const [moveOrder, setMoveOrder] = useState<Order|null>(null);
+  // Nunca se usa el estado antiguo como fallback de cobro: sin Fase 12 la
+  // caja puede previsualizar pedidos, pero toda mutación de pago queda bloqueada.
+  const [paymentSchemaReady, setPaymentSchemaReady] = useState(false);
   // Fase 3: mermas (productos dados de baja)
   const [wasteList, setWasteList] = useState<Waste[]>([]);
   const [wasteModal, setWasteModal] = useState(false);
@@ -516,8 +531,11 @@ export default function App() {
 
   // Pedidos abiertos para el mapa de mesas del mesero
   const loadWaiterOrders = useCallback(async () => {
-    const { data } = await getDB().from("orders").select("*, order_items(*)").in("status",["enviado","preparando","listo"]).order("created_at",{ascending:true});
-    setWOrders(data||[]);
+    const { data, error } = await getDB().from("orders").select("*, order_items(*)")
+      .in("status",["enviado","preparando","listo"]).eq("payment_status","pending").order("created_at",{ascending:true});
+    // Fase 12 vuelve pago y preparación ciclos independientes: un pedido paid
+    // pertenece al historial aunque su preparación haya quedado como listo.
+    if (!error) setWOrders((data||[]) as Order[]);
   }, []);
 
   useEffect(() => {
@@ -566,13 +584,19 @@ export default function App() {
         async (p: {new: Order}) => {
           const { data } = await getDB().from("orders").select("*, order_items(*)").eq("id",p.new.id).single();
           const full: Order = data || {...p.new, order_items:[]};
-          setWOrders((prev:Order[])=>prev.some((o:Order)=>o.id===full.id)?prev.map((o:Order)=>o.id===full.id?full:o):[...prev, full]);
+          setWOrders((prev:Order[]) => {
+            const operational = ["enviado","preparando","listo"].includes(full.status) && full.payment_status !== "paid";
+            if (!operational) return prev.filter((o:Order)=>o.id!==full.id);
+            return prev.some((o:Order)=>o.id===full.id)
+              ? prev.map((o:Order)=>o.id===full.id?full:o)
+              : [...prev, full];
+          });
         })
       .on("postgres_changes",{event:"UPDATE",schema:"public",table:"orders"},
         (p: {new: Order}) => {
           setWOrders((prev:Order[])=>prev
             .map((o:Order)=>o.id===p.new.id?{...o,...p.new}:o)
-            .filter((o:Order)=>["enviado","preparando","listo"].includes(o.status)));
+            .filter((o:Order)=>["enviado","preparando","listo"].includes(o.status) && o.payment_status !== "paid"));
         })
       .subscribe();
     return () => { getDB().removeChannel(ch); };
@@ -583,13 +607,13 @@ export default function App() {
     Notification.requestPermission().then(p=>setNotifPermission(p));
   }
 
-  const loadKitchen = useCallback(async () => {
+  const loadKitchen = useCallback(async (station: Station = "kitchen") => {
     setKLoading(true);
     const todayStart = new Date(); todayStart.setHours(0,0,0,0);
     const [{ data: orders }, { data: summaryItems }] = await Promise.all([
-      getDB().from("orders").select("*, order_items(*)").in("status",["enviado","preparando"]).order("created_at",{ascending:false}),
+      getDB().from("orders").select("*, order_items!inner(*)").eq("order_items.station",station).in("status",["enviado","preparando"]).order("created_at",{ascending:false}),
       getDB().from("order_items").select("product_name,quantity,orders!inner(created_at,status)")
-        .neq("orders.status","cancelado").gte("orders.created_at",todayStart.toISOString()),
+        .eq("station",station).neq("orders.status","cancelado").gte("orders.created_at",todayStart.toISOString()),
     ]);
     setKOrders(orders||[]);
     const sMap: Record<string,number> = {};
@@ -600,15 +624,25 @@ export default function App() {
     setKLoading(false);
   }, []);
 
+  async function ensurePaymentSchema(): Promise<boolean> {
+    const { error } = await getDB().from("orders").select("payment_status").limit(1);
+    const ready = !error;
+    setPaymentSchemaReady(ready);
+    if (!ready) setPayError("Se requiere la migración Fase 12 (Pago independiente). Vista previa segura: no se puede cobrar hasta aplicar Fase 12.");
+    return ready;
+  }
+
   const loadCashier = useCallback(async () => {
     setCLoading(true);
     const today = new Date(); today.setHours(0,0,0,0);
-    // Pedidos abiertos: sin filtro de fecha (pueden venir de días anteriores)
-    const { data: openOrders } = await getDB().from("orders").select("*, order_items(*)").in("status",["enviado","preparando","listo"]).order("created_at",{ascending:false});
-    // Pedidos pagados hoy: solo para el resumen del día
-    const { data: paidToday } = await getDB().from("orders").select("*, order_items(*)").eq("status","pagado").gte("created_at",today.toISOString()).order("created_at",{ascending:false});
-    const orders = [...(openOrders||[]), ...(paidToday||[])];
-    const paidIds = (paidToday||[]).map((o:Order)=>o.id);
+    const schemaReady = await ensurePaymentSchema();
+    const query = getDB().from("orders").select("*, order_items(*)").neq("status","cancelado").order("created_at",{ascending:false});
+    const { data } = await query;
+    // Sin Fase 12 se permite inspeccionar la lista, pero nunca se infiere ni se
+    // escribe un pago: todos los pedidos se presentan como pendientes y bloqueados.
+    const allOrders = ((data||[]) as Order[]).map(o => schemaReady ? o : {...o, payment_status:"pending" as PaymentStatus});
+    const orders = allOrders.filter(o => o.payment_status==="pending" || new Date(o.created_at)>=today);
+    const paidIds = orders.filter(o=>o.payment_status==="paid").map(o=>o.id);
     const pb = {efectivo:0,tarjeta:0,transferencia:0};
     if (paidIds.length) {
       const { data: payments } = await getDB().from("payments").select("order_id,method,amount").in("order_id",paidIds);
@@ -617,14 +651,14 @@ export default function App() {
         if (p.method in pb) pb[p.method as keyof typeof pb] += p.amount;
       });
     }
-    setCOrders(orders||[]);
+    setCOrders(orders);
     setCPayBreakdown(pb);
     setCLoading(false);
   }, []);
 
   useEffect(() => {
-    if (screen==="kitchen") {
-      loadKitchen();
+    if (screen==="kitchen" || screen==="bar") {
+      loadKitchen(screen==="bar" ? "bar" : "kitchen");
       // Cocina necesita el catálogo para el selector de "dar de baja"
       if (products.length===0) {
         getDB().from("products").select("*").eq("is_active",true).order("category")
@@ -653,39 +687,31 @@ export default function App() {
     return () => { getDB().removeChannel(ch); };
   }, [screen]);
 
-  // Realtime cocina
+  // Realtime por estación. Recargamos el join filtrado para no mostrar ni mutar
+  // líneas de la otra estación cuando el trigger recalcula la cabecera.
   useEffect(() => {
-    if (screen!=="kitchen") return;
-    const ch = getDB().channel("kitchen-rt")
+    if (screen!=="kitchen" && screen!=="bar") return;
+    const station: Station = screen==="bar" ? "bar" : "kitchen";
+    const ch = getDB().channel(`${station}-rt`)
       .on("postgres_changes",{event:"INSERT",schema:"public",table:"orders"},
-        async (p: {new: Order}) => {
+        (p: {new: Order}) => {
           playBeep();
-          // Notificación del sistema — avisa aunque la pestaña esté en
-          // segundo plano (requiere permiso ya concedido; ver banner arriba)
           if (typeof Notification!=="undefined" && Notification.permission==="granted") {
             try {
               const n = new Notification(`Nuevo pedido — ${p.new.table_label}`, {
                 body: `#${p.new.order_number}${p.new.customer_name?" · "+p.new.customer_name:""}`,
-                icon: "/icon-192.png",
-                tag: p.new.id,
+                icon: "/icon-192.png", tag: p.new.id,
               });
               n.onclick = () => { window.focus(); n.close(); };
             } catch(_) { /* algunos navegadores la bloquean silenciosamente */ }
           }
-          // El evento realtime llega sin items — la tarjeta salía vacía en cocina
-          const { data } = await getDB().from("orders").select("*, order_items(*)").eq("id",p.new.id).single();
-          const full: Order = data || {...p.new, order_items:[]};
-          setKOrders((prev:Order[])=>prev.some((o:Order)=>o.id===full.id)?prev.map((o:Order)=>o.id===full.id?full:o):[full, ...prev]);
+          loadKitchen(station);
         })
-      .on("postgres_changes",{event:"UPDATE",schema:"public",table:"orders"},
-        (p: {new: Order}) => {
-          setKOrders((prev:Order[])=>prev
-            .map((o:Order)=>o.id===p.new.id?{...o,...p.new}:o)
-            .filter((o:Order)=>["enviado","preparando"].includes(o.status)));
-        })
+      .on("postgres_changes",{event:"UPDATE",schema:"public",table:"orders"},()=>{ loadKitchen(station); })
+      .on("postgres_changes",{event:"UPDATE",schema:"public",table:"order_items"},()=>{ loadKitchen(station); })
       .subscribe();
     return () => { getDB().removeChannel(ch); };
-  }, [screen]);
+  }, [screen, loadKitchen]);
 
   // Timer para tiempo transcurrido en cocina
   useEffect(() => {
@@ -735,14 +761,14 @@ export default function App() {
     const prevStart = new Date(new Date(start).getTime()-spanMs).toISOString();
 
     const [{ data: periodOrders }, { data: items }, { data: exRows }, { data: fxRows }, { data: wRows }, { data: prevOrders }, { data: prodCats }] = await Promise.all([
-      getDB().from("orders").select("id,total,created_at").eq("status","pagado").gte("created_at",start).lt("created_at",end),
-      getDB().from("order_items").select("product_id,product_name,quantity,unit_price,orders!inner(status,created_at)")
-        .eq("orders.status","pagado").gte("orders.created_at",start).lt("orders.created_at",end),
+      getDB().from("orders").select("id,total,created_at").eq("payment_status","paid").gte("created_at",start).lt("created_at",end),
+      getDB().from("order_items").select("product_id,product_name,quantity,unit_price,orders!inner(payment_status,created_at)")
+        .eq("orders.payment_status","paid").gte("orders.created_at",start).lt("orders.created_at",end),
       // Si las tablas de fase 3/4 no existen aún, estas queries devuelven null y se ignoran
       getDB().from("expenses").select("amount,category").gte("expense_date",start.slice(0,10)).lt("expense_date",end.slice(0,10)),
       getDB().from("fixed_expenses").select("amount").eq("active",true),
       getDB().from("waste").select("quantity,unit_price,reason").gte("created_at",start).lt("created_at",end),
-      getDB().from("orders").select("total").eq("status","pagado").gte("created_at",prevStart).lt("created_at",start),
+      getDB().from("orders").select("total").eq("payment_status","paid").gte("created_at",prevStart).lt("created_at",start),
       getDB().from("products").select("id,category"),
     ]);
 
@@ -1037,7 +1063,7 @@ export default function App() {
       difference: Math.round((counted-expected)*100)/100,
       expected_card: cPayBreakdown.tarjeta,
       expected_transfer: cPayBreakdown.transferencia,
-      total_orders: cOrders.filter(o=>o.status==="pagado").length,
+      total_orders: cOrders.filter(o=>o.payment_status==="paid").length,
       notes: closureNotes.trim()||null,
       closed_by: profile?.id,
       closer_name: profile?.name,
@@ -1080,7 +1106,7 @@ export default function App() {
     const { data: orders } = await getDB().from("orders").select("*, order_items(*)").gte("created_at",start).lt("created_at",end).order("created_at",{ascending:false});
     setHistOrders(orders||[]);
     setHistSelected(new Set());
-    const ids = (orders||[]).filter((o:Order)=>o.status==="pagado").map((o:Order)=>o.id);
+    const ids = (orders||[]).filter((o:Order)=>o.payment_status==="paid").map((o:Order)=>o.id);
     const map: Record<string,Payment[]> = {};
     if (ids.length) {
       const { data: pays } = await getDB().from("payments").select("order_id,method,amount,created_at,charger_name").in("order_id",ids);
@@ -1177,9 +1203,17 @@ export default function App() {
     setCart(prev => { const cur=prev[id]; if(!cur) return prev; return {...prev,[id]:{...cur,customNote}}; });
   }
 
+  async function ensurePreparationSchema(): Promise<boolean> {
+    const { error } = await getDB().from("order_items").select("station,item_status").limit(1);
+    if (!error) return true;
+    setSentMsg("Se requiere la migración Fase 11 (Barra y Cocina) antes de enviar pedidos.");
+    return false;
+  }
+
   async function sendToKitchen() {
     const items = Object.values(cart) as CartItem[];
     if (!items.length || !customerName.trim()) return;
+    if (!await ensurePreparationSchema()) return;
     const total = items.reduce((s,i)=>s+i.price*i.qty,0);
     // Se mantiene la misma clave mientras haya un intento pendiente para
     // esta composición del pedido — si se edita el carrito, se descarta.
@@ -1218,6 +1252,7 @@ export default function App() {
         const { error: itemsError } = await getDB().from("order_items").insert(items.map((i:CartItem)=>({
           order_id:order!.id, product_id:i.id, product_name:i.name,
           quantity:i.qty, unit_price:i.price,
+          station:stationForCategory(i.category), item_status:"enviado",
           notes:[...i.notes, i.customNote].filter(Boolean).join(", ")||null
         })));
         if (itemsError) { setSentMsg("Pedido creado pero hubo un error con los items. Avisa al admin."); setSending(false); return; }
@@ -1246,16 +1281,18 @@ export default function App() {
     });
   }
 
-  async function kitchenUpdate(id: string, status: Status) {
-    setUpdating(id);
-    const { error } = await getDB().from("orders").update({status}).eq("id",id);
+  async function stationItemUpdate(itemId: string, station: Station, status: OrderItem["item_status"]) {
+    setUpdating(itemId);
+    // Sin fallback a orders: el trigger de Fase 11 calcula el agregado seguro.
+    const { error } = await getDB().from("order_items").update({item_status:status}).eq("id",itemId).eq("station",station);
     if (error) {
-      setWasteMsg(`Error al actualizar pedido: ${error.message}`);
+      setWasteMsg(`Error al actualizar ítem: ${error.message}. Se requiere la migración Fase 11.`);
       setUpdating(null);
       return;
     }
-    if (status==="listo") setKOrders(prev=>prev.filter(o=>o.id!==id));
-    else setKOrders(prev=>prev.map(o=>o.id===id?{...o,status}:o));
+    setKOrders(prev=>prev.map(o=>({...o,order_items:(o.order_items||[])
+      .map(i=>i.id===itemId?{...i,item_status:status}:i)
+      .filter(i=>i.item_status!=="listo")})).filter(o=>(o.order_items||[]).length>0));
     setUpdating(null);
   }
 
@@ -1331,25 +1368,20 @@ export default function App() {
     }
   }
 
-  // Cobro atómico vía RPC pay_order (transacción en Postgres: valida estado,
-  // registra pagos, marca pagado y descuenta inventario — rechaza doble cobro).
-  // Si el SQL de fase 1 aún no se corrió, usa el flujo directo con guardia.
+  // Cobro atómico vía RPC Fase 12: bloquea la fila, valida payment_status,
+  // registra pagos y descuenta inventario sin alterar el estado de preparación.
   async function payOrder(orderId: string, parts: {method:string; amount:number}[]) {
+    if (!paymentSchemaReady) {
+      setPayError("Se requiere la migración Fase 12 (Pago independiente). Vista previa segura: no se puede cobrar hasta aplicar Fase 12.");
+      return;
+    }
     setPaying(orderId);
     let err = "";
     const { data, error } = await getDB().rpc("pay_order", { p_order_id: orderId, p_parts: parts });
     if (error) {
-      const missingFn = error.code === "PGRST202" || /pay_order/.test(error.message||"");
-      if (missingFn) {
-        // Fallback: marcar pagado SOLO si nadie lo pagó antes (guardia anti doble cobro)
-        const { data: updated } = await getDB().from("orders").update({status:"pagado"}).eq("id",orderId).neq("status","pagado").select();
-        if (!updated?.length) err = "Este pedido ya fue cobrado en otra caja.";
-        else {
-          await Promise.all(parts.map(p=>getDB().from("payments").insert({order_id:orderId,method:p.method,amount:p.amount})));
-          const { data: freshOrder } = await getDB().from("orders").select("*, order_items(*)").eq("id",orderId).single();
-          if (freshOrder) await deductInventory(freshOrder);
-        }
-      } else err = error.message;
+      err = error.code === "PGRST202" || /pay_order/.test(error.message||"")
+        ? "Se requiere la migración Fase 12 (Pago independiente). No se realizó ningún cobro."
+        : error.message;
     } else if (data && data.ok === false) {
       err = data.error || "No se pudo registrar el cobro";
     }
@@ -1358,7 +1390,7 @@ export default function App() {
       setTimeout(()=>setPayError(""), 6000);
       loadCashier();
     } else {
-      setCOrders((prev:Order[])=>prev.map(o=>o.id===orderId?{...o,status:"pagado"}:o));
+      setCOrders((prev:Order[])=>prev.map(o=>o.id===orderId?{...o,payment_status:"paid"}:o));
       setCPayBreakdown((prev:{efectivo:number;tarjeta:number;transferencia:number})=>{
         const next = {...prev};
         parts.forEach(p=>{ next[p.method as keyof typeof next] = (next[p.method as keyof typeof next]||0) + p.amount; });
@@ -1450,7 +1482,7 @@ export default function App() {
 
     if (data.order_paid) {
       const orderId = itemPayModal.id;
-      setCOrders((prev:Order[])=>prev.map(o=>o.id===orderId?{...o,status:"pagado"}:o));
+      setCOrders((prev:Order[])=>prev.map(o=>o.id===orderId?{...o,payment_status:"paid"}:o));
       setItemPayModal(null);
     }
   }
@@ -1503,11 +1535,9 @@ export default function App() {
 
   // Mapa de mesas (compartido entre mesero y caja) — declarada antes del
   // guard de hidratación de abajo porque algunos useEffect (registrados
-  // antes de ese corte, como exige React) la necesitan: si quedara más
-  // abajo, esos efectos la referenciarían sin haberse inicializado nunca
-  // en el primer render (ok=false), y rompía la carga para todos.
+  // Mapa de mesas compartido: un pedido cobrado queda en historial, no ocupa mesa.
   const mesaOrdersOf = (orders: Order[], m: string) =>
-    orders.filter(o=>o.table_label===m && !["pagado","cancelado"].includes(o.status));
+    orders.filter(o=>o.table_label===m && o.status!=="cancelado" && o.payment_status!=="paid");
 
   if (!ok) return null;
 
@@ -1535,11 +1565,12 @@ export default function App() {
     boxShadow: dis ? "none" : bg===RED ? `0 4px 12px rgba(225,59,45,0.3)` : "none",
   });
 
-  const badge = (s: Status) => {
-    const m: Record<Status,[string,string]> = {
-      enviado: [RED,"#fff"], preparando:[GOLD,DARK], listo:[GREEN,"#fff"], pagado:["#E0D0C0",MUTED], cancelado:["#D0C0B0",MUTED]
+  const badge = (s: FulfillmentStatus) => {
+    const m: Record<FulfillmentStatus,[string,string]> = {
+      enviado: [RED,"#fff"], preparando:[GOLD,DARK], listo:[GREEN,"#fff"], cancelado:["#D0C0B0",MUTED]
     };
-    return { background:m[s][0], color:m[s][1], padding:"4px 12px", borderRadius:99, fontSize:12, fontWeight:800, letterSpacing:"0.03em", display:"inline-block" as const };
+    const colors = m[s] || m.listo;
+    return { background:colors[0], color:colors[1], padding:"4px 12px", borderRadius:99, fontSize:12, fontWeight:800, letterSpacing:"0.03em", display:"inline-block" as const };
   };
 
   // Categorías dinámicas + las huérfanas que aún tengan productos
@@ -1584,7 +1615,8 @@ export default function App() {
         const isSel = selected===m;
         const stateColor = libre ? "#C9B99F" : allListo ? GREEN : GOLD;
         const stateText  = libre ? "#A08D75" : allListo ? GREEN : "#8A6210";
-        const stateLabel = libre ? "Libre" : allListo ? "Por cobrar" : "En cocina";
+        const hasPaidPreparing = mo.some(o=>o.payment_status==="paid" && o.status!=="listo");
+        const stateLabel = libre ? "Libre" : hasPaidPreparing ? "Pagado · en preparación" : allListo ? "Listo para entregar" : "En preparación";
         const oldest = mo.length ? mo.reduce((a,b)=>new Date(a.created_at)<new Date(b.created_at)?a:b) : null;
         const isLlevar = /llevar/i.test(m), isDelivery = /delivery|domicilio/i.test(m);
         void tick; // el tiempo de espera se refresca cada minuto
@@ -1621,6 +1653,7 @@ export default function App() {
             </div>
 
             <p style={{fontSize:17,fontWeight:900,color:libre?"#8F7E66":DARK,letterSpacing:"-0.01em",marginBottom:3}}>{m}</p>
+            {isLlevar && <p style={{fontSize:11,fontWeight:800,color:MUTED,marginBottom:4}}>Se puede cobrar antes de terminar la preparación</p>}
 
             {libre ? (
               <p style={{fontSize:12,fontWeight:600,color:"#B3A184"}}>Disponible</p>
@@ -1960,11 +1993,11 @@ export default function App() {
               )}
 
               {/* Product list — vertical en móvil, grid en desktop */}
-              <div className="product-grid" style={{padding:"12px 12px 0",display:"flex",flexDirection:"column",gap:8}}>
+              <div className="product-grid product-tile-grid" style={{padding:"12px 12px 0",display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8}}>
                 {visProd.map(p=>{
                   const qty=cart[p.id]?.qty||0;
                   return (
-                    <div key={p.id} className="product-list-item" style={{
+                    <div key={p.id} className="product-list-item product-tile" style={{
                       background:qty>0?"#fff":"#fff",
                       borderRadius:16,
                       border:qty>0?`2px solid ${RED}`:`1px solid ${BORDER}`,
@@ -2072,13 +2105,16 @@ export default function App() {
         </div>
       )}
 
-      {/* ── COCINA ─────────────────────────────────────────────── */}
-      {screen==="kitchen" && (
+      {/* ── COCINA / BARRA ─────────────────────────────────────── */}
+      {(screen==="kitchen" || screen==="bar") && (() => {
+        const station: Station = screen==="bar" ? "bar" : "kitchen";
+        const stationLabel = station==="bar" ? "Barra" : "Cocina";
+        return (
         <div style={{padding:16,maxWidth:1100,margin:"0 auto",width:"100%"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap" as const,gap:10}}>
             <div>
               <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:2}}>Módulo</p>
-              <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK}}>Cocina</h1>
+              <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK}}>{stationLabel}</h1>
             </div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
               <button onClick={()=>{setWasteOrderCtx(null);setNewWaste({product_id:"",quantity:"1",reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
@@ -2088,7 +2124,7 @@ export default function App() {
               <button onClick={playBeep} style={{...btn(CREAM2,DARK),height:44,padding:"0 16px",fontSize:14}}>
                 🔊 Probar sonido
               </button>
-              <button onClick={loadKitchen} style={{...btn(CREAM2,DARK),height:44,padding:"0 18px",fontSize:14}}>
+              <button onClick={()=>loadKitchen(station)} style={{...btn(CREAM2,DARK),height:44,padding:"0 18px",fontSize:14}}>
                 {kLoading?"Cargando…":"↻ Actualizar"}
               </button>
             </div>
@@ -2123,8 +2159,8 @@ export default function App() {
           {/* Status counters */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:20}}>
             {[
-              {label:"Nuevos",status:"enviado",count:kOrders.filter(o=>o.status==="enviado").length,bg:RED,fg:"#fff"},
-              {label:"Preparando",status:"preparando",count:kOrders.filter(o=>o.status==="preparando").length,bg:GOLD,fg:DARK},
+              {label:"Nuevos",status:"enviado",count:kOrders.flatMap(o=>o.order_items||[]).filter(i=>i.item_status==="enviado").length,bg:RED,fg:"#fff"},
+              {label:"Preparando",status:"preparando",count:kOrders.flatMap(o=>o.order_items||[]).filter(i=>i.item_status==="preparando").length,bg:GOLD,fg:DARK},
             ].map(({label,count,bg,fg})=>(
               <div key={label} style={{background:bg,borderRadius:14,padding:"14px 10px",textAlign:"center" as const,boxShadow:`0 4px 16px ${bg}44`}}>
                 <p style={{fontSize:36,fontWeight:900,color:fg,lineHeight:1}}>{count}</p>
@@ -2174,9 +2210,6 @@ export default function App() {
           ) : (
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(290px,1fr))",gap:12}}>
               {kOrders.map(o=>{
-                const busy=updating===o.id;
-                const next=o.status==="enviado"?"preparando":o.status==="preparando"?"listo":null;
-                const nextLabel=next==="preparando"?"Marcar Preparando":next==="listo"?"Marcar Listo":null;
                 const time=new Date(o.created_at).toLocaleTimeString("es-EC",{hour:"2-digit",minute:"2-digit"});
                 const mins=Math.floor((Date.now()-new Date(o.created_at).getTime())/60000);
                 void tick;
@@ -2193,12 +2226,16 @@ export default function App() {
                       <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Prep.":"Listo"}</span>
                     </div>
                     <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
-                      {(o.order_items||[]).map(i=>(
+                      {(o.order_items||[]).filter(i=>i.station===station).map(i=>(
                         <div key={i.id} style={{background:CREAM,borderRadius:8,padding:"8px 12px"}}>
                           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,fontSize:14,fontWeight:700,color:DARK}}>
                             <span>{i.quantity}× {i.product_name}</span>
                             <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
                               <span style={{fontWeight:800}}>{$(i.quantity*i.unit_price)}</span>
+                              {i.item_status!=="listo" && <button disabled={updating===i.id} onClick={()=>stationItemUpdate(i.id,station,i.item_status==="enviado"?"preparando":"listo")}
+                                style={{...btn(i.item_status==="enviado"?GOLD:GREEN,"#fff",updating===i.id),height:30,minHeight:30,padding:"0 9px",fontSize:11}}>
+                                {updating===i.id?"…":i.item_status==="enviado"?"Preparar":"Listo"}
+                              </button>}
                               {i.product_id && (
                                 <button title="Se quemó / cayó / etc. — dar de baja este producto"
                                   onClick={()=>{setWasteOrderCtx(o);setNewWaste({product_id:i.product_id,quantity:String(i.quantity),reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
@@ -2220,17 +2257,15 @@ export default function App() {
                       <span style={{fontSize:13,color:"rgba(255,255,255,0.45)",fontWeight:600}}>Total pedido</span>
                       <span style={{fontSize:20,fontWeight:900,color:GOLD}}>{$(o.total)}</span>
                     </div>
-                    <div style={{display:"flex",gap:8}}>
-                      {nextLabel && <button disabled={busy} onClick={()=>kitchenUpdate(o.id,next as Status)} style={{...btn(RED,"#fff",busy),flex:1,height:50}}>{busy?"Guardando…":nextLabel}</button>}
-                      {o.status==="enviado" && <button disabled={busy} onClick={()=>cancelOrder(o.id)} style={{...btn(CREAM2,MUTED,busy),height:50,padding:"0 14px",fontSize:13}}>Cancelar</button>}
-                    </div>
+                    <p style={{fontSize:11,fontWeight:700,color:MUTED}}>Actualiza cada ítem de {stationLabel.toLowerCase()} por separado.</p>
                   </div>
                 );
               })}
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
 
       {/* ── CAJA ───────────────────────────────────────────────── */}
       {screen==="cashier" && (
@@ -2275,13 +2310,13 @@ export default function App() {
             <div>
               {/* Métricas en móvil */}
               {(()=>{
-                const open=cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado");
-                const paid=cOrders.filter(o=>o.status==="pagado");
+                const open=cOrders.filter(o=>o.payment_status==="pending"&&o.status!=="cancelado");
+                const paid=cOrders.filter(o=>o.payment_status==="paid");
                 return (
                   <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:16}}>
                     {[
                       {v:String(open.length),l:"Abiertos",bg:DARK,fg:"#fff",acc:GOLD},
-                      {v:String(open.filter(o=>o.status==="listo").length),l:"Listos p/ cobrar",bg:RED,fg:"#fff",acc:"#fff"},
+                      {v:String(open.filter(o=>o.status==="listo").length),l:"Listos p/ entregar",bg:RED,fg:"#fff",acc:"#fff"},
                       {v:$(open.reduce((s,o)=>s+o.total,0)),l:"Por cobrar",bg:GOLD,fg:DARK,acc:DARK},
                       {v:$(paid.reduce((s,o)=>s+o.total,0)),l:"Cobrado hoy",bg:GREEN,fg:"#fff",acc:"#fff"},
                     ].map(({v,l,bg,fg,acc})=>(
@@ -2317,13 +2352,13 @@ export default function App() {
                 ):null;
               })()}
 
-              {cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado").length===0&&!cLoading ? (
+              {cOrders.filter(o=>o.payment_status==="pending"&&o.status!=="cancelado").length===0&&!cLoading ? (
                 <div style={{textAlign:"center" as const,padding:"60px 20px"}}>
                   <p style={{fontWeight:800,fontSize:20,color:MUTED}}>Sin pedidos pendientes</p>
                 </div>
               ) : (
                 <div style={{display:"flex",flexDirection:"column",gap:12}}>
-                  {cOrders.filter(o=>o.status!=="pagado"&&o.status!=="cancelado").map(o=>{
+                  {cOrders.filter(o=>o.payment_status==="pending"&&o.status!=="cancelado").map(o=>{
                     const time=new Date(o.created_at).toLocaleTimeString("es-EC",{hour:"2-digit",minute:"2-digit"});
                     return (
                       <button key={o.id} onClick={()=>openMesaModal(o.table_label)} style={{...card,padding:16,border:o.status==="listo"?`2px solid ${GREEN}`:`1px solid ${BORDER}`,
@@ -2332,7 +2367,7 @@ export default function App() {
                           <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:4}}>#{o.order_number} · {time}</p>
                           <p style={{fontSize:22,fontWeight:900,color:DARK,marginBottom:2}}>{o.table_label}</p>
                           {o.customer_name && <p style={{fontSize:13,fontWeight:800,color:GOLD,marginBottom:4}}>👤 {o.customer_name}</p>}
-                          <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Preparando":"Listo para cobrar"}</span>
+                          <span style={badge(o.status)}>{o.payment_status==="paid" ? (o.status==="listo" ? "Pagado · listo para entregar" : "Pagado · en preparación") : (o.status==="listo" ? "Pendiente · listo para entregar" : "Pendiente · en preparación")}</span>
                         </div>
                         <p style={{fontSize:"clamp(22px,3vw,28px)",fontWeight:900,color:RED}}>{$(o.total)}</p>
                       </button>
@@ -2345,7 +2380,7 @@ export default function App() {
             {/* Columna derecha sticky — resumen del día (solo desktop) */}
             <aside className="cashier-sidebar" style={{flexDirection:"column",gap:12,position:"sticky" as const,top:72}}>
               {(()=>{
-                const paid=cOrders.filter(o=>o.status==="pagado");
+                const paid=cOrders.filter(o=>o.payment_status==="paid");
                 return (
                   <>
                     <div style={{...card,padding:16}}>
@@ -3052,9 +3087,9 @@ export default function App() {
           {adminSection==="history" && (() => {
             const OPEN_STATUSES = ["enviado","preparando","listo"];
             const shown = histStatus==="abiertos"
-              ? histOrders.filter(o=>OPEN_STATUSES.includes(o.status))
-              : histOrders.filter(o=>o.status===histStatus);
-            const totalPeriod = histOrders.filter(o=>o.status==="pagado").reduce((s,o)=>s+o.total,0);
+              ? histOrders.filter(o=>OPEN_STATUSES.includes(o.status) && o.payment_status==="pending")
+              : histStatus==="pagado" ? histOrders.filter(o=>o.payment_status==="paid") : histOrders.filter(o=>o.status==="cancelado");
+            const totalPeriod = histOrders.filter(o=>o.payment_status==="paid").reduce((s,o)=>s+o.total,0);
             const methodLabel: Record<string,string> = { efectivo:"Efectivo", tarjeta:"Tarjeta", transferencia:"Transferencia" };
             const statusLabel: Record<string,string> = { pagado:"Pagado", cancelado:"Cancelado", enviado:"Nuevo", preparando:"En prep.", listo:"Listo" };
             const allShownSelected = shown.length>0 && shown.every(o=>histSelected.has(o.id));
@@ -3076,7 +3111,7 @@ export default function App() {
                 <div style={{display:"flex",gap:10,flexWrap:"wrap" as const,alignItems:"center",marginBottom:16}}>
                   <div style={{background:DARK,borderRadius:12,padding:"12px 18px"}}>
                     <p style={{fontSize:20,fontWeight:900,color:GOLD,lineHeight:1}}>{$(totalPeriod)}</p>
-                    <p style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase" as const,letterSpacing:"0.08em",marginTop:3}}>{histOrders.filter(o=>o.status==="pagado").length} cobrados</p>
+                    <p style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase" as const,letterSpacing:"0.08em",marginTop:3}}>{histOrders.filter(o=>o.payment_status==="paid").length} cobrados</p>
                   </div>
                   <div style={{display:"flex",gap:6,marginLeft:"auto",flexWrap:"wrap" as const}}>
                     {(["pagado","cancelado","abiertos"] as const).map(s=>(
@@ -3145,16 +3180,16 @@ export default function App() {
                             <p style={{fontSize:11,fontWeight:600,color:MUTED,marginTop:2}}>
                               Pedido: {new Date(o.created_at).toLocaleString("es-EC",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}
                               {o.creator_name?` · Tomado por ${o.creator_name}`:""}
-                              {o.status==="pagado" && pays[0]?.created_at ? ` → Cobrado: ${new Date(pays[0].created_at).toLocaleString("es-EC",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}${pays[0]?.charger_name?` por ${pays[0].charger_name}`:""}` : ""}
+                              {o.payment_status==="paid" && pays[0]?.created_at ? ` → Cobrado: ${new Date(pays[0].created_at).toLocaleString("es-EC",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}${pays[0]?.charger_name?` por ${pays[0].charger_name}`:""}` : ""}
                             </p>
-                            {o.status==="pagado" && pays.length>0 && (
+                            {o.payment_status==="paid" && pays.length>0 && (
                               <p style={{fontSize:11,fontWeight:700,color:GOLD,marginTop:2}}>
                                 {pays.map(p=>`${methodLabel[p.method]||p.method} ${$(p.amount)}`).join(" + ")}
                               </p>
                             )}
                           </div>
                           <span style={badge(o.status)}>{statusLabel[o.status]||o.status}</span>
-                          <span style={{fontSize:16,fontWeight:900,color:o.status==="pagado"?GREEN:MUTED}}>{$(o.total)}</span>
+                          <span style={{fontSize:16,fontWeight:900,color:o.payment_status==="paid"?GREEN:MUTED}}>{$(o.total)}</span>
                           <span style={{fontSize:12,color:MUTED,fontWeight:700}}>{open?"▲":"▼"}</span>
                         </button>
                         {open && (
@@ -3171,7 +3206,7 @@ export default function App() {
                             {(o.order_items||[]).length===0 && <p style={{fontSize:12,color:MUTED,fontWeight:600}}>Sin detalle de items</p>}
                             {o.table_note && <p style={{fontSize:12,fontWeight:700,color:DARK,marginTop:4}}>Nota de mesa: {o.table_note}</p>}
                             <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap" as const}}>
-                              {o.status==="pagado" && (
+                              {o.payment_status==="paid" && (
                                 <button onClick={()=>annulOrder(o.id)}
                                   style={{...btn("rgba(122,30,58,0.1)",RED),height:38,padding:"0 14px",fontSize:13}}>
                                   Anular pedido
@@ -3429,9 +3464,9 @@ export default function App() {
           })()}
 
           {adminSection==="users" && (() => {
-            const roleLabels: Record<Role,string> = { waiter:"Mesero", kitchen:"Cocina", cashier:"Caja", admin:"Admin" };
-            const roleBg: Record<Role,string> = { waiter:DARK, kitchen:GOLD, cashier:GREEN, admin:RED };
-            const roleFg: Record<Role,string> = { waiter:"#fff", kitchen:DARK, cashier:"#fff", admin:"#fff" };
+            const roleLabels: Record<Role,string> = { waiter:"Mesero", kitchen:"Cocina", bar:"Barra", cashier:"Caja", admin:"Admin" };
+            const roleBg: Record<Role,string> = { waiter:DARK, kitchen:GOLD, bar:"#237A8A", cashier:GREEN, admin:RED };
+            const roleFg: Record<Role,string> = { waiter:"#fff", kitchen:DARK, bar:"#fff", cashier:"#fff", admin:"#fff" };
             const chipInput = { padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none" };
             const toggleRole = (roles: Role[], r: Role): Role[] =>
               roles.includes(r) ? roles.filter(x=>x!==r) : [...roles, r];
@@ -3868,7 +3903,8 @@ export default function App() {
         const orders = mesaOrdersOf(cOrders, payModalMesa);
         if (!orders.length) return null;
         const total = orders.reduce((s,o)=>s+o.total,0);
-        const allListo = orders.every(o=>o.status==="listo");
+        const pendingOrders = orders.filter(o=>o.payment_status==="pending" && o.status!=="cancelado");
+        const allListo = pendingOrders.length>0 && pendingOrders.every(o=>o.status==="listo");
         const methodLabels={efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia"};
         const methodBg={efectivo:DARK,tarjeta:RED,transferencia:GOLD};
         const methodFg={efectivo:"#fff",tarjeta:"#fff",transferencia:DARK};
@@ -3892,14 +3928,13 @@ export default function App() {
                 <span style={{fontSize:24,fontWeight:900,color:GOLD}}>{$(total)}</span>
               </div>
 
-              {/* Cobrar todo junto — solo si hay más de un pedido, todos listos y
-                  ninguno tiene ya cobros parciales por persona (fase 11/12) */}
-              {orders.length>1 && allListo && !orders.some(o=>partiallyPaidOrders.has(o.id)) && (
+              {/* Cobrar todo junto solo a pedidos pendientes, listos y sin cobro parcial. */}
+              {pendingOrders.length>1 && allListo && !pendingOrders.some(o=>partiallyPaidOrders.has(o.id)) && (
                 <div style={{marginBottom:18,paddingBottom:16,borderBottom:`1.5px dashed ${BORDER}`}}>
                   <p style={{fontSize:13,fontWeight:700,color:DARK,marginBottom:10}}>Cobrar mesa completa — ¿con qué método?</p>
                   <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
                     {(["efectivo","tarjeta","transferencia"] as const).map(m=>(
-                      <button key={m} onClick={()=>payWholeMesa(orders, m)}
+                      <button key={m} onClick={()=>payWholeMesa(pendingOrders, m)}
                         style={{...btn(methodBg[m],methodFg[m]),flex:1,minWidth:100,height:48,fontSize:13}}>
                         {methodLabels[m]}
                       </button>
@@ -3912,19 +3947,18 @@ export default function App() {
               {/* Un card por pedido */}
               <div style={{display:"flex",flexDirection:"column" as const,gap:10}}>
                 {orders.map(o=>{
-                  const isListo = o.status==="listo", busy = paying===o.id;
+                  const isListo = o.status==="listo";
+                  const busy = paying===o.id;
                   const hasPartial = partiallyPaidOrders.has(o.id);
-                  // Si ya tiene cobros parciales por persona, los botones de cobro
-                  // total quedan bloqueados (duplicarían el cobro) — hay que
-                  // terminar de cobrar con "Por persona".
-                  const canPay = isListo && !hasPartial;
+                  const canPay = paymentSchemaReady && o.payment_status==="pending" && isListo && !hasPartial;
+                  const canPayPerPerson = paymentSchemaReady && o.payment_status==="pending" && isListo;
                   const expanded = expandedOrder===o.id;
                   return (
                     <div key={o.id} style={{background:CREAM,borderRadius:12,padding:"12px 14px"}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,marginBottom:8}}>
                         <div>
                           <p style={{fontSize:14,fontWeight:900,color:DARK}}>#{o.order_number}{o.customer_name?` · ${o.customer_name}`:""}</p>
-                          <span style={badge(o.status)}>{o.status==="enviado"?"Nuevo":o.status==="preparando"?"Preparando":"Listo para cobrar"}</span>
+                          <span style={badge(o.status)}>{o.payment_status==="paid" ? (o.status==="listo" ? "Pagado · listo para entregar" : "Pagado · en preparación") : (o.status==="listo" ? "Pendiente · listo para entregar" : "Pendiente · en preparación")}</span>
                         </div>
                         <div style={{display:"flex",flexDirection:"column" as const,alignItems:"flex-end",gap:6}}>
                           <span style={{fontSize:16,fontWeight:900,color:RED}}>{$(o.total)}</span>
@@ -3950,21 +3984,22 @@ export default function App() {
                         </div>
                       )}
 
-                      {!isListo && <p style={{fontSize:12,color:MUTED,fontWeight:600,marginBottom:8,background:"#fff",borderRadius:8,padding:"6px 10px"}}>Esperando que cocina marque como Listo</p>}
-                      {isListo && hasPartial && <p style={{fontSize:12,color:"#8A6210",fontWeight:700,marginBottom:8,background:"#FFF6DD",borderRadius:8,padding:"6px 10px"}}>Ya tiene cobros parciales por persona — seguí cobrando con &quot;Por persona&quot; hasta cubrir todo.</p>}
+                      {!paymentSchemaReady && <p style={{fontSize:12,color:ALERT_RED,fontWeight:700,marginBottom:8,background:"#fff",borderRadius:8,padding:"6px 10px"}}>Vista previa segura: no se puede cobrar hasta aplicar Fase 12</p>}
+                      {paymentSchemaReady && !isListo && <p style={{fontSize:12,color:MUTED,fontWeight:600,marginBottom:8,background:"#fff",borderRadius:8,padding:"6px 10px"}}>Esperando que cocina marque como Listo</p>}
+                      {paymentSchemaReady && isListo && hasPartial && <p style={{fontSize:12,color:"#8A6210",fontWeight:700,marginBottom:8,background:"#FFF6DD",borderRadius:8,padding:"6px 10px"}}>Ya tiene cobros parciales por persona — seguí cobrando con &quot;Por persona&quot; hasta cubrir todo.</p>}
                       <div style={{display:"flex",gap:6,flexWrap:"wrap" as const}}>
                         {(["efectivo","tarjeta","transferencia"] as const).map(m=>(
                           <button key={m} disabled={!canPay||busy} onClick={()=>cobrar(o.id,m,o.total)}
                             style={{...btn(methodBg[m],methodFg[m],!canPay||busy),flex:1,minWidth:90,height:44,fontSize:12}}>
-                            {busy?"…":methodLabels[m]}
+                            {busy?"…":`Cobrar ahora · ${methodLabels[m]}`}
                           </button>
                         ))}
                         <button disabled={!canPay||busy} onClick={()=>{setSplitModal(o);setSplitAmounts({efectivo:"",tarjeta:"",transferencia:""});}}
                           style={{...btn(CREAM2,DARK,!canPay||busy),flex:1,minWidth:80,height:44,fontSize:12,border:`1px solid ${BORDER}`}}>
                           Dividir
                         </button>
-                        <button disabled={!isListo||busy} onClick={()=>openItemPayModal(o)}
-                          style={{...btn(CREAM2,DARK,!isListo||busy),flex:1,minWidth:100,height:44,fontSize:12,border:`1px solid ${BORDER}`}}>
+                        <button disabled={!canPayPerPerson||busy} onClick={()=>openItemPayModal(o)}
+                          style={{...btn(CREAM2,DARK,!canPayPerPerson||busy),flex:1,minWidth:100,height:44,fontSize:12,border:`1px solid ${BORDER}`}}>
                           Por persona
                         </button>
                         <button disabled={busy} onClick={()=>setMoveOrder(o)}

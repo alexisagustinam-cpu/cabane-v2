@@ -35,7 +35,7 @@ begin
   end if;
 
   -- Nunca permitir que metadatos externos rompan la creación en Auth.
-  if not (v_roles <@ array['waiter','kitchen','cashier','admin']::text[]) then
+  if not (v_roles <@ array['waiter','kitchen','bar','cashier','admin']::text[]) then
     v_roles := array['waiter'];
   end if;
 

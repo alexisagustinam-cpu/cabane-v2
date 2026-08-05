@@ -20,7 +20,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="Cabane" />
       </head>
-      <body style={{ margin: 0, background: "#EDE0CE", fontFamily: "'Nunito', system-ui, sans-serif" }}>
+      <body suppressHydrationWarning style={{ margin: 0, background: "#EDE0CE", fontFamily: "'Nunito', system-ui, sans-serif" }}>
         {children}
       </body>
     </html>
