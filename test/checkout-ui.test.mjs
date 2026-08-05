@@ -15,3 +15,13 @@ test("cashier presents payment methods without repeating the payment action", ()
 test("moving an order is not mixed into payment controls", () => {
   assert.match(client, /className="order-service-actions"/);
 });
+
+test("cashier lets staff release a fully paid and ready physical table from its table popup", () => {
+  const cashierPopup = client.slice(
+    client.indexOf("POPUP DE MESA (CAJA)"),
+    client.indexOf("MODAL MOVER PEDIDO")
+  );
+  assert.match(cashierPopup, /const canReleaseTable/);
+  assert.match(cashierPopup, /Liberar mesa/);
+  assert.match(cashierPopup, /releaseTable\(payModalMesa\)/);
+});

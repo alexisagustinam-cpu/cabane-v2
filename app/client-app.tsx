@@ -1554,13 +1554,20 @@ export default function App() {
       setSentMsg("Para liberar mesas falta aplicar Fase 13 en Supabase.");
       return;
     }
-    const { error } = await getDB().from("orders").update({table_released_at:new Date().toISOString()})
+    const releasedAt = new Date().toISOString();
+    const { error } = await getDB().from("orders").update({table_released_at:releasedAt})
       .eq("table_label",tableLabel).is("table_released_at",null).eq("payment_status","paid").eq("status","listo");
     if (error) {
       setSentMsg(`No se pudo liberar ${tableLabel}: ${error.message}`);
       return;
     }
-    setWOrders(prev=>prev.filter(o=>o.table_label!==tableLabel));
+    const markReleased = (list:Order[]) => list.map(o=>o.table_label===tableLabel && o.payment_status==="paid" && o.status==="listo"
+      ? {...o,table_released_at:releasedAt} : o);
+    setCOrders(markReleased);
+    setWOrders(markReleased);
+    setKOrders(markReleased);
+    setPayModalMesa(null);
+    setCashierMesa(null);
     setSentMsg(`${tableLabel} quedó libre para atender un nuevo cliente.`);
     setTimeout(()=>setSentMsg(""),5000);
   }
@@ -3944,6 +3951,8 @@ export default function App() {
         if (!orders.length) return null;
         const total = orders.reduce((s,o)=>s+o.total,0);
         const pendingOrders = orders.filter(o=>o.payment_status==="pending" && o.status!=="cancelado");
+        const physicalTable = !/llevar|delivery|domicilio/i.test(payModalMesa);
+        const canReleaseTable = physicalTable && orders.every(o=>o.payment_status==="paid" && o.status==="listo");
         const methodLabels={efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia"};
         const methodBg={efectivo:DARK,tarjeta:RED,transferencia:GOLD};
         const methodFg={efectivo:"#fff",tarjeta:"#fff",transferencia:DARK};
@@ -3966,6 +3975,16 @@ export default function App() {
                 <span style={{fontSize:14,color:"rgba(255,255,255,0.5)",fontWeight:600}}>Total mesa</span>
                 <span style={{fontSize:24,fontWeight:900,color:GOLD}}>{$(total)}</span>
               </div>
+
+              {canReleaseTable && (
+                <div style={{background:"rgba(47,125,50,0.10)",border:`1.5px solid ${GREEN}`,borderRadius:12,padding:"12px 14px",marginBottom:16}}>
+                  <p style={{fontSize:13,fontWeight:800,color:GREEN,marginBottom:8}}>Todo está pagado y listo para entregar.</p>
+                  <button onClick={()=>askConfirm(`¿Liberar ${payModalMesa}? La mesa quedará disponible para un nuevo cliente.`,()=>releaseTable(payModalMesa))}
+                    style={{...btn(GREEN,"#fff"),width:"100%",height:44,fontSize:14}}>
+                    Liberar mesa
+                  </button>
+                </div>
+              )}
 
               {/* Cobrar toda la mesa: pago es independiente de preparación. */}
               {pendingOrders.length>1 && !pendingOrders.some(o=>partiallyPaidOrders.has(o.id)) && (
