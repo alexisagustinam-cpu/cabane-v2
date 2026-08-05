@@ -3977,12 +3977,18 @@ export default function App() {
               </div>
 
               {canReleaseTable && (
-                <div style={{background:"rgba(47,125,50,0.10)",border:`1.5px solid ${GREEN}`,borderRadius:12,padding:"12px 14px",marginBottom:16}}>
-                  <p style={{fontSize:13,fontWeight:800,color:GREEN,marginBottom:8}}>Todo está pagado y listo para entregar.</p>
-                  <button onClick={()=>askConfirm(`¿Liberar ${payModalMesa}? La mesa quedará disponible para un nuevo cliente.`,()=>releaseTable(payModalMesa))}
-                    style={{...btn(GREEN,"#fff"),width:"100%",height:44,fontSize:14}}>
-                    Liberar mesa
-                  </button>
+                <div style={{background:tableReleaseSchemaReady?"rgba(47,125,50,0.10)":"#FFF6DD",border:`1.5px solid ${tableReleaseSchemaReady?GREEN:GOLD}`,borderRadius:12,padding:"12px 14px",marginBottom:16}}>
+                  {tableReleaseSchemaReady ? (
+                    <>
+                      <p style={{fontSize:13,fontWeight:800,color:GREEN,marginBottom:8}}>Todo está pagado y listo para entregar.</p>
+                      <button onClick={()=>askConfirm(`¿Liberar ${payModalMesa}? La mesa quedará disponible para un nuevo cliente.`,()=>releaseTable(payModalMesa))}
+                        style={{...btn(GREEN,"#fff"),width:"100%",height:44,fontSize:14}}>
+                        Liberar mesa
+                      </button>
+                    </>
+                  ) : (
+                    <p style={{fontSize:13,fontWeight:800,color:"#8A6210"}}>Para liberar mesas falta aplicar Fase 13 en Supabase.</p>
+                  )}
                 </div>
               )}
 

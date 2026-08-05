@@ -22,6 +22,8 @@ test("cashier lets staff release a fully paid and ready physical table from its 
     client.indexOf("MODAL MOVER PEDIDO")
   );
   assert.match(cashierPopup, /const canReleaseTable/);
+  assert.match(cashierPopup, /tableReleaseSchemaReady/);
+  assert.match(cashierPopup, /Para liberar mesas falta aplicar Fase 13 en Supabase/);
   assert.match(cashierPopup, /Liberar mesa/);
   assert.match(cashierPopup, /releaseTable\(payModalMesa\)/);
 });
