@@ -10,6 +10,7 @@
   background: radial-gradient(circle at 12% 15%, rgba(109, 33, 56, 0.13), transparent 26%),
     radial-gradient(circle at 88% 85%, rgba(197, 154, 88, 0.16), transparent 26%), #e9ded0;
   padding: 24px;
+  overscroll-behavior: none;
 }
 
 .root {
@@ -36,6 +37,7 @@
   font-family: "Nunito", system-ui, -apple-system, sans-serif;
   position: relative;
   overflow: hidden;
+  overscroll-behavior: none;
   border: 1px solid rgba(58, 30, 38, 0.12);
   box-shadow: 0 38px 100px rgba(49, 19, 30, 0.28);
 }
@@ -397,6 +399,7 @@
   padding: 13px 0 calc(14px + env(safe-area-inset-bottom)) 7px;
   overflow-y: auto;
   overflow-x: visible;
+  overscroll-behavior-y: contain;
   scrollbar-width: none;
   z-index: 2;
 }
@@ -453,7 +456,7 @@
 .categoryBtn svg {
   width: 22px;
   height: 22px;
-  transition: transform 0.4s var(--spring);
+  transition: transform 0.3s var(--snap);
 }
 .categoryBtnActive svg {
   transform: scale(1.12) translateY(-1px);
@@ -475,6 +478,7 @@
   flex: 1;
   min-width: 0;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   scrollbar-width: none;
   padding: 17px 15px 36px;
   background: radial-gradient(circle at 92% 7%, rgba(197, 154, 88, 0.12), transparent 18%), var(--paper);
@@ -689,7 +693,7 @@
   color: #fff;
   background: radial-gradient(circle at 100% 0%, rgba(197, 154, 88, 0.18), transparent 28%), linear-gradient(165deg, var(--wineDark), var(--wineDeep));
   transform: translateX(100%);
-  transition: transform 0.5s var(--spring);
+  transition: transform 0.4s var(--snap);
   box-shadow: -22px 0 60px rgba(0, 0, 0, 0.28);
   display: flex;
   flex-direction: column;
