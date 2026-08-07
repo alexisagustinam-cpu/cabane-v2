@@ -166,8 +166,16 @@ export default function MenuClient({ categories, products }: { categories: Categ
     setTimeout(reveal, 160);
   }
 
-  // Entrada escalonada de la pantalla de bienvenida
+  // Entrada escalonada de la pantalla de bienvenida — depende de splashGone
+  // (no de un [] que solo corre una vez) porque "Inicio" la vuelve a montar:
+  // sin esto, al volver del menú la bienvenida quedaba con sus elementos en
+  // opacity:0 para siempre (la animación de entrada nunca volvía a correr).
   useEffect(() => {
+    if (splashGone) return;
+    xRef.current = 0;
+    if (knobRef.current) knobRef.current.style.transform = "translateX(0px)";
+    if (fillRef.current) fillRef.current.style.transform = "scaleX(0)";
+    if (labelRef.current) labelRef.current.style.opacity = "1";
     if (!rootRef.current) return;
     const els = rootRef.current.querySelectorAll("." + styles.rise);
     animate(els, {
@@ -177,7 +185,12 @@ export default function MenuClient({ categories, products }: { categories: Categ
       delay: stagger(90, { start: 60 }),
       ease: "outExpo",
     });
-  }, []);
+  }, [splashGone]);
+
+  function goHome() {
+    setRevealed(false);
+    setSplashGone(false);
+  }
 
   // Indicador de categoría activa: se desliza a su posición SIN rebote
   // (con rebote se ve raro en un control que se toca seguido — a diferencia
@@ -306,7 +319,7 @@ export default function MenuClient({ categories, products }: { categories: Categ
             </div>
           </div>
           <div className={styles.menuActions}>
-            <button className={styles.roundBtn} aria-label="Inicio" onClick={() => setRevealed(false)}>
+            <button className={styles.roundBtn} aria-label="Inicio" onClick={goHome}>
               <svg viewBox="0 0 24 24" width={19} height={19} fill="none" stroke="currentColor" strokeWidth={1.8}><path d="m4 11 8-7 8 7v8a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1Z"/></svg>
             </button>
             <button className={styles.roundBtn} aria-label="Información" onClick={() => setDrawerOpen(true)}>
