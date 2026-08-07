@@ -1,3 +1,17 @@
+/* En pantallas anchas (computadora) el menú se ve como una tarjeta tipo
+   celular centrada, en vez de estirarse de punta a punta — esto sigue
+   siendo, ante todo, una experiencia para el QR de la mesa. En pantallas
+   angostas ocupa toda la pantalla, sin marco. */
+.page {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 12% 15%, rgba(109, 33, 56, 0.13), transparent 26%),
+    radial-gradient(circle at 88% 85%, rgba(197, 154, 88, 0.16), transparent 26%), #e9ded0;
+  padding: 24px;
+}
+
 .root {
   --wine: #6d2138;
   --wineDark: #2c1019;
@@ -13,12 +27,31 @@
   --ease: cubic-bezier(0.22, 0.9, 0.28, 1);
   --snap: cubic-bezier(0.16, 1, 0.3, 1);
 
-  min-height: 100dvh;
+  width: min(460px, 100%);
+  height: min(920px, calc(100dvh - 48px));
+  min-height: 600px;
+  border-radius: 40px;
   background: #e9ded0;
   color: var(--ink);
   font-family: "Nunito", system-ui, -apple-system, sans-serif;
   position: relative;
   overflow: hidden;
+  border: 1px solid rgba(58, 30, 38, 0.12);
+  box-shadow: 0 38px 100px rgba(49, 19, 30, 0.28);
+}
+
+@media (max-width: 560px) {
+  .page {
+    padding: 0;
+  }
+  .root {
+    width: 100%;
+    height: 100dvh;
+    min-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
 }
 
 .root * {
@@ -30,7 +63,10 @@
   cursor: pointer;
   background: none;
   font: inherit;
-  color: inherit;
+  /* sin color acá: "color:inherit" con este selector (clase+elemento) le
+     gana en especificidad a reglas de un solo componente como .categoryBtn,
+     y todos los íconos del riel terminaban heredando el ink oscuro en vez
+     de su color propio. Cada botón ya define su color explícito. */
 }
 
 .root img {

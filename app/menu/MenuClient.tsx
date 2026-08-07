@@ -208,6 +208,7 @@ export default function MenuClient({ categories, products }: { categories: Categ
   }
 
   return (
+    <div className={styles.page}>
     <div ref={rootRef} className={styles.root}>
       {/* ── SPLASH ─────────────────────────────────────── */}
       {!splashGone && (
@@ -393,6 +394,7 @@ export default function MenuClient({ categories, products }: { categories: Categ
           </div>
         </aside>
       </div>
+    </div>
     </div>
   );
 }
