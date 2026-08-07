@@ -72,6 +72,7 @@ export default function MenuClient({ categories, products }: { categories: Categ
   const [splashGone, setSplashGone] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [modalProduct, setModalProduct] = useState<MenuProduct | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -108,6 +109,16 @@ export default function MenuClient({ categories, products }: { categories: Categ
   const media = CATEGORY_MEDIA[active];
   const featured = media ? items.find(p => p.name === media.anchor) || items[0] : null;
   const regular = featured ? items.filter(p => p.id !== featured.id) : items;
+
+  // La mayoría de los platos todavía no tiene foto propia (no hay esa
+  // columna en products todavía). Mientras tanto, en el detalle se
+  // reutiliza la foto de su categoría como ambientación — aclarado con
+  // una etiqueta — salvo para el plato ancla, que sí es su foto real.
+  function getModalImage(p: MenuProduct): { src: string; illustrative: boolean } | null {
+    const catMedia = CATEGORY_MEDIA[p.category];
+    if (!catMedia) return null;
+    return { src: catMedia.image, illustrative: p.name !== catMedia.anchor };
+  }
 
   function reveal() {
     setRevealed(true);
@@ -230,6 +241,10 @@ export default function MenuClient({ categories, products }: { categories: Categ
       catalogRef.current?.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
     }, 220);
   }
+
+  function openModalProduct(p: MenuProduct) { setModalProduct(p); }
+  function closeModalProduct() { setModalProduct(null); }
+  const modalImg = modalProduct ? getModalImage(modalProduct) : null;
 
   return (
     <div className={styles.page}>
@@ -355,7 +370,16 @@ export default function MenuClient({ categories, products }: { categories: Categ
               </div>
 
               {featured && (
-                <article key={active} className={styles.featureCard} data-anim-card>
+                <article
+                  key={active}
+                  className={styles.featureCard}
+                  data-anim-card
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`Ver detalle de ${featured.name}`}
+                  onClick={() => openModalProduct(featured)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openModalProduct(featured); } }}
+                >
                   {media && (
                     <Image
                       src={media.image}
@@ -379,7 +403,16 @@ export default function MenuClient({ categories, products }: { categories: Categ
 
               <div className={styles.productList}>
                 {regular.map((p) => (
-                  <div key={p.id} className={styles.productCard} data-anim-card>
+                  <div
+                    key={p.id}
+                    className={styles.productCard}
+                    data-anim-card
+                    tabIndex={0}
+                    role="button"
+                    aria-label={`Ver detalle de ${p.name}`}
+                    onClick={() => openModalProduct(p)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openModalProduct(p); } }}
+                  >
                     <div className={styles.productCopy}>
                       <small>{p.category}</small>
                       <h3>{p.name}</h3>
@@ -422,6 +455,39 @@ export default function MenuClient({ categories, products }: { categories: Categ
             </button>
           </div>
         </aside>
+      </div>
+
+      {/* ── MODAL DE DETALLE ──────────────────────────── */}
+      <div className={`${styles.modalLayer} ${modalProduct ? styles.modalLayerOpen : ""}`} onClick={(e) => { if (e.target === e.currentTarget) closeModalProduct(); }}>
+        {modalProduct && (
+          <article className={styles.modalCard}>
+            <div className={styles.modalPhoto}>
+              {modalImg && (
+                <Image
+                  src={modalImg.src}
+                  alt={modalProduct.name}
+                  fill
+                  sizes="(max-width: 560px) 100vw, 460px"
+                  ref={fadeInImgRef}
+                  onLoad={(e) => e.currentTarget.classList.add(styles.loaded)}
+                />
+              )}
+              {modalImg?.illustrative && <span className={styles.modalPhotoNote}>Foto ilustrativa de la categoría</span>}
+              <button className={styles.modalX} aria-label="Cerrar" onClick={closeModalProduct}>
+                <svg viewBox="0 0 24 24" width={18} height={18} fill="none" stroke="currentColor" strokeWidth={1.8}><path d="m6 6 12 12M18 6 6 18"/></svg>
+              </button>
+            </div>
+            <div className={styles.modalBody}>
+              <div className={styles.modalCat}>{modalProduct.category}</div>
+              <h3>{modalProduct.name}</h3>
+              {modalProduct.description && <p>{modalProduct.description}</p>}
+              <div className={styles.modalFoot}>
+                <strong className={styles.modalPrice}>{$(modalProduct.price)}</strong>
+                <button className={styles.modalCloseText} onClick={closeModalProduct}>Cerrar</button>
+              </div>
+            </div>
+          </article>
+        )}
       </div>
     </div>
     </div>
