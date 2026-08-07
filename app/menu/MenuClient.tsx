@@ -84,6 +84,8 @@ export default function MenuClient({ categories, products }: { categories: Categ
   const btnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const catalogRef = useRef<HTMLDivElement>(null);
   const catalogInnerRef = useRef<HTMLDivElement>(null);
+  const modalLayerRef = useRef<HTMLDivElement>(null);
+  const modalCardRef = useRef<HTMLDivElement>(null);
 
   // En el celular, la barra de Safari se recalcula al ocultarse/aparecer y
   // durante esa transición puede asomar un pixel del fondo de la página
@@ -243,8 +245,46 @@ export default function MenuClient({ categories, products }: { categories: Categ
   }
 
   function openModalProduct(p: MenuProduct) { setModalProduct(p); }
-  function closeModalProduct() { setModalProduct(null); }
+  function closeModalProduct() {
+    const layer = modalLayerRef.current, card = modalCardRef.current;
+    if (!layer || !card) { setModalProduct(null); return; }
+    animate(layer, { opacity: [1, 0], duration: 280, ease: "outExpo" });
+    animate(card, {
+      opacity: [1, 0],
+      translateY: [0, 24],
+      scale: [1, 0.96],
+      duration: 260,
+      ease: "inExpo",
+      onComplete: () => setModalProduct(null),
+    });
+  }
   const modalImg = modalProduct ? getModalImage(modalProduct) : null;
+
+  // Entrada del modal: la tarjeta sube con un spring sutil (acá sí encaja
+  // un poco de rebote — abrir el detalle de un plato es una acción puntual,
+  // no algo que se toque seguido como el riel de categorías) y el
+  // contenido de adentro entra escalonado, foto primero.
+  useLayoutEffect(() => {
+    if (!modalProduct) return;
+    const layer = modalLayerRef.current, card = modalCardRef.current;
+    if (!layer || !card) return;
+    animate(layer, { opacity: [0, 1], duration: 260, ease: "outExpo" });
+    animate(card, {
+      opacity: [0, 1],
+      translateY: [36, 0],
+      scale: [0.95, 1],
+      duration: 520,
+      ease: spring({ stiffness: 210, damping: 20 }),
+    });
+    const inner = card.querySelectorAll("[data-modal-stagger]");
+    animate(inner, {
+      opacity: [0, 1],
+      translateY: [12, 0],
+      duration: 420,
+      delay: stagger(70, { start: 140 }),
+      ease: "outExpo",
+    });
+  }, [modalProduct]);
 
   return (
     <div className={styles.page}>
@@ -458,10 +498,10 @@ export default function MenuClient({ categories, products }: { categories: Categ
       </div>
 
       {/* ── MODAL DE DETALLE ──────────────────────────── */}
-      <div className={`${styles.modalLayer} ${modalProduct ? styles.modalLayerOpen : ""}`} onClick={(e) => { if (e.target === e.currentTarget) closeModalProduct(); }}>
+      <div ref={modalLayerRef} className={`${styles.modalLayer} ${modalProduct ? styles.modalLayerOpen : ""}`} onClick={(e) => { if (e.target === e.currentTarget) closeModalProduct(); }}>
         {modalProduct && (
-          <article className={styles.modalCard}>
-            <div className={styles.modalPhoto}>
+          <article ref={modalCardRef} className={styles.modalCard}>
+            <div className={styles.modalPhoto} data-modal-stagger>
               {modalImg && (
                 <Image
                   src={modalImg.src}
@@ -477,7 +517,7 @@ export default function MenuClient({ categories, products }: { categories: Categ
                 <svg viewBox="0 0 24 24" width={18} height={18} fill="none" stroke="currentColor" strokeWidth={1.8}><path d="m6 6 12 12M18 6 6 18"/></svg>
               </button>
             </div>
-            <div className={styles.modalBody}>
+            <div className={styles.modalBody} data-modal-stagger>
               <div className={styles.modalCat}>{modalProduct.category}</div>
               <h3>{modalProduct.name}</h3>
               {modalProduct.description && <p>{modalProduct.description}</p>}

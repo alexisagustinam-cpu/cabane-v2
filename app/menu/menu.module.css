@@ -787,6 +787,9 @@
 
 /* ---------- MODAL DE DETALLE ---------- */
 .modalLayer {
+  /* opacity y transform de .modalLayer/.modalCard los maneja animejs
+     (entrada con spring sutil + contenido escalonado, salida prolija en
+     vez de cortarse seco) — acá solo lo que no se anima. */
   position: absolute;
   inset: 0;
   background: rgba(24, 8, 14, 0.48);
@@ -794,10 +797,8 @@
   z-index: 40;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.3s var(--ease);
 }
 .modalLayerOpen {
-  opacity: 1;
   pointer-events: auto;
 }
 .modalCard {
@@ -808,17 +809,13 @@
   border-radius: 26px;
   background: var(--paper);
   overflow: hidden;
-  transform: translateY(40px);
-  opacity: 0;
-  transition: transform 0.4s var(--snap), opacity 0.3s var(--ease);
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.34);
   max-height: calc(100% - 28px);
   display: flex;
   flex-direction: column;
 }
-.modalLayerOpen .modalCard {
-  transform: translateY(0);
-  opacity: 1;
+.modalCard [data-modal-stagger] {
+  opacity: 0;
 }
 .modalPhoto {
   height: 200px;
