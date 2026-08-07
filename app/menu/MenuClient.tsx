@@ -84,6 +84,16 @@ export default function MenuClient({ categories, products }: { categories: Categ
   const catalogRef = useRef<HTMLDivElement>(null);
   const catalogInnerRef = useRef<HTMLDivElement>(null);
 
+  // En el celular, la barra de Safari se recalcula al ocultarse/aparecer y
+  // durante esa transición puede asomar un pixel del fondo de la página
+  // detrás de la tarjeta. Si eso pasa, que sea del mismo tono oscuro del
+  // menú en vez del crema de fondo — mucho menos notorio.
+  useEffect(() => {
+    const prev = document.body.style.background;
+    document.body.style.background = "#180b10";
+    return () => { document.body.style.background = prev; };
+  }, []);
+
   const draggingRef = useRef(false);
   const startXRef = useRef(0);
   const xRef = useRef(0);

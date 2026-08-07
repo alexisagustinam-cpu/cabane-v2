@@ -520,6 +520,10 @@
   margin-bottom: 16px;
   box-shadow: 0 20px 44px rgba(68, 20, 38, 0.22);
   overflow: hidden;
+  /* fondo de marca visible mientras la foto todavía está cargando (wifi
+     lenta de restaurante) — antes se veía gris/vacío, como si algo hubiera
+     fallado, en vez de una tarjeta a medio cargar a propósito. */
+  background: linear-gradient(135deg, var(--wineDark), var(--wineDeep));
 }
 .featureCard img {
   position: absolute;
