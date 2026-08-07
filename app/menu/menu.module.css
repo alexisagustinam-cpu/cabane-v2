@@ -45,11 +45,17 @@
 @media (max-width: 560px) {
   .page {
     padding: 0;
+    /* svh (small viewport height) en vez de dvh: dvh se recalcula cuando
+       la barra de Safari se oculta/aparece, y durante esa transición el
+       fondo de .page llega a asomar debajo del contenido — un "corte"
+       justo arriba de la barra del navegador. svh es el piso fijo (con la
+       barra siempre visible), así el contenido nunca queda más corto. */
+    min-height: 100svh;
   }
   .root {
     width: 100%;
-    height: 100dvh;
-    min-height: 100dvh;
+    height: 100svh;
+    min-height: 100svh;
     border: 0;
     border-radius: 0;
     box-shadow: none;
@@ -398,7 +404,12 @@
   background: radial-gradient(circle at 40% 10%, rgba(197, 154, 88, 0.15), transparent 20%), linear-gradient(180deg, var(--wineDark), var(--wineDeep));
   padding: 13px 0 calc(14px + env(safe-area-inset-bottom)) 7px;
   overflow-y: auto;
-  overflow-x: visible;
+  /* explícito (no "visible"): mezclar overflow-x:visible con overflow-y:auto
+     hace que el navegador promueva el eje x a "auto" también (así lo pide
+     el spec), y como los botones eran a propósito más anchos que el riel
+     (para el efecto de "sangrado" del indicador), el riel terminaba siendo
+     arrastrable de lado — eso era el "se puede mover" en el celular. */
+  overflow-x: hidden;
   overscroll-behavior-y: contain;
   scrollbar-width: none;
   z-index: 2;
@@ -410,39 +421,22 @@
   position: absolute;
   top: 0;
   left: 7px;
-  width: calc(100% + 16px - 7px);
+  right: 0;
   height: 68px;
   background: var(--paper);
-  border-radius: 18px 0 0 18px;
+  border-radius: 16px 0 0 16px;
   z-index: 0;
-  box-shadow: 0 12px 28px rgba(58, 19, 31, 0.16);
+  box-shadow: 0 8px 20px rgba(58, 19, 31, 0.16);
   opacity: 0;
   pointer-events: none;
 }
-.railIndicator::before,
-.railIndicator::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  width: 28px;
-  height: 28px;
-  pointer-events: none;
-}
-.railIndicator::before {
-  top: -28px;
-  box-shadow: 12px 12px 0 12px var(--paper);
-}
-.railIndicator::after {
-  bottom: -28px;
-  box-shadow: 12px -12px 0 12px var(--paper);
-}
 .categoryBtn {
-  width: calc(100% + 16px);
+  width: 100%;
   min-height: 68px;
   background: transparent;
   color: rgba(255, 255, 255, 0.48);
-  margin: 0 -16px 6px 0;
-  padding: 8px 14px 8px 4px;
+  margin: 0 0 6px 0;
+  padding: 8px 4px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -450,7 +444,6 @@
   gap: 6px;
   position: relative;
   z-index: 1;
-  overflow: visible;
   transition: color 0.3s var(--ease);
 }
 .categoryBtn svg {

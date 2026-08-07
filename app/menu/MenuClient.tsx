@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import { animate, stagger, spring } from "animejs";
 import styles from "./menu.module.css";
 
@@ -214,10 +215,13 @@ export default function MenuClient({ categories, products }: { categories: Categ
       {!splashGone && (
         <section className={`${styles.screen} ${styles.splash} ${revealed ? styles.screenHidden : ""}`}>
           <div className={styles.splashPhotoWrap}>
-            <img
+            <Image
               src="/menu-hero.jpg"
               alt="Sánduche Cabane recién armado"
               className={styles.splashPhoto}
+              fill
+              sizes="(max-width: 560px) 100vw, 460px"
+              priority
               ref={fadeInImgRef}
               onLoad={(e) => e.currentTarget.classList.add(styles.loaded)}
             />
@@ -227,7 +231,7 @@ export default function MenuClient({ categories, products }: { categories: Categ
             <header className={`${styles.splashHead} ${styles.rise}`}>
               <div className={styles.brandLockup}>
                 <div className={styles.brandLogo}>
-                  <img src="/logo.jpg" alt="Cabane Sandwiches" />
+                  <Image src="/logo.jpg" alt="Cabane Sandwiches" width={54} height={54} priority />
                 </div>
                 <div className={styles.brandCopy}>
                   <strong>Cabane</strong>
@@ -285,7 +289,7 @@ export default function MenuClient({ categories, products }: { categories: Categ
       <section className={`${styles.screen} ${styles.menu} ${!revealed ? styles.screenHidden : ""}`}>
         <header className={styles.menuTop}>
           <div className={styles.menuBrand}>
-            <div className={styles.menuLogo}><img src="/logo.jpg" alt="" /></div>
+            <div className={styles.menuLogo}><Image src="/logo.jpg" alt="" width={40} height={40} /></div>
             <div className={styles.menuTitle}>
               <strong>Cabane Sandwiches</strong>
               <span>Menú del restaurante</span>
@@ -330,9 +334,11 @@ export default function MenuClient({ categories, products }: { categories: Categ
               {featured && (
                 <article key={active} className={styles.featureCard} data-anim-card>
                   {media && (
-                    <img
+                    <Image
                       src={media.image}
                       alt={featured.name}
+                      fill
+                      sizes="(max-width: 560px) 100vw, 460px"
                       ref={fadeInImgRef}
                       onLoad={(e) => e.currentTarget.classList.add(styles.loaded)}
                     />
