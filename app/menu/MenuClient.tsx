@@ -1,18 +1,39 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-
-const INK = "#160D11", MAROON = "#2A1A1F", WINE = "#7A1E3A", GOLD = "#B5894A", CREAM = "#EDE0CE", PAPER = "#FBF7EF", MUTED = "rgba(232,213,183,0.55)";
-const SERIF = "Georgia, 'Times New Roman', serif";
-const SANS = "'Nunito', sans-serif";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { animate, stagger, spring } from "animejs";
+import styles from "./menu.module.css";
 
 interface Category { id: string; name: string; sort: number }
 interface MenuProduct { id: string; name: string; category: string; price: number; description: string | null }
 
 const $ = (n: number) => `$${n.toFixed(2)}`;
 
+// Si la imagen ya está en caché, el navegador puede completarla antes de que
+// React llegue a enganchar onLoad — sin esto, el fundido de entrada se queda
+// trabado en opacity:0 para fotos que cargan casi instantáneo (como en local).
+function fadeInImgRef(el: HTMLImageElement | null) {
+  if (el?.complete && el.naturalWidth > 0) el.classList.add(styles.loaded);
+}
+
+// Foto "hero" + plato ancla por categoría — no hay foto por producto todavía
+// (la tabla products no tiene esa columna), así que por ahora cada categoría
+// muestra UNA foto real en su plato más representativo; el resto de los
+// productos de esa categoría se listan solo con texto hasta tener más fotos.
+const CATEGORY_MEDIA: Record<string, { image: string; anchor: string }> = {
+  "Sánduches": { image: "/menu-cat-sanduches.jpg", anchor: "El de la Casa" },
+  "Desayunos": { image: "/menu-cat-desayunos.jpg", anchor: "Campestre" },
+  "Clásicos": { image: "/menu-cat-clasicos.jpg", anchor: "Chori-Lomo Cabane" },
+  "Ensaladas": { image: "/menu-cat-ensaladas.jpg", anchor: "Cabane Salad" },
+  "Tablitas": { image: "/menu-cat-tablitas.jpg", anchor: "Blita Cabane" },
+  "Para Compartir": { image: "/menu-cat-compartir.jpg", anchor: "Mixta" },
+  "Bebidas": { image: "/menu-cat-bebidas.jpg", anchor: "Mojito" },
+  "Cafés": { image: "/menu-cat-cafes.jpg", anchor: "Latte Ferrero Rocher" },
+  "Postres": { image: "/menu-cat-postres.jpg", anchor: "Chesscake Avellana y Ferrero Rocher" },
+};
+
 // Íconos de línea por categoría — coincidencia por palabra clave, con un
-// genérico de respaldo para categorías nuevas que el admin agregue después.
+// genérico de respaldo (estrella) para categorías nuevas que el admin agregue después.
 function CategoryIcon({ name, size = 22 }: { name: string; size?: number }) {
   const n = name.toLowerCase();
   const common = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
@@ -37,7 +58,7 @@ function CategoryIcon({ name, size = 22 }: { name: string; size?: number }) {
   if (/tablita|tabla|picoteo|queso/.test(n)) return (
     <svg {...common}><rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="8.3" cy="10" r="0.9" fill="currentColor" stroke="none"/><circle cx="12" cy="10" r="0.9" fill="currentColor" stroke="none"/><circle cx="15.7" cy="10" r="0.9" fill="currentColor" stroke="none"/><circle cx="8.3" cy="15" r="0.9" fill="currentColor" stroke="none"/><circle cx="12" cy="15" r="0.9" fill="currentColor" stroke="none"/><circle cx="15.7" cy="15" r="0.9" fill="currentColor" stroke="none"/></svg>
   );
-  if (/s[aá]nduche|sandwich|cl[aá]sico|burger|hamburguesa/.test(n)) return (
+  if (/s[aá]nduche|sandwich|burger|hamburguesa/.test(n)) return (
     <svg {...common}><path d="M3.5 12 12 5l8.5 7"/><path d="M4.5 12h15l-1.6 6.3a2 2 0 0 1-1.9 1.5H8a2 2 0 0 1-1.9-1.5L4.5 12Z"/><path d="M4.5 12c1.2 1.4 2.3 1.4 3.5 0s2.3-1.4 3.5 0 2.3 1.4 3.5 0 2.3-1.4 3.5 0"/></svg>
   );
   return (
@@ -48,11 +69,23 @@ function CategoryIcon({ name, size = 22 }: { name: string; size?: number }) {
 export default function MenuClient({ categories, products }: { categories: Category[]; products: MenuProduct[] }) {
   const [revealed, setRevealed] = useState(false);
   const [splashGone, setSplashGone] = useState(false);
-  const [drag, setDrag] = useState(0);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const knobRef = useRef<HTMLDivElement>(null);
+  const fillRef = useRef<HTMLDivElement>(null);
+  const labelRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLElement>(null);
+  const indicatorRef = useRef<HTMLDivElement>(null);
+  const btnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const catalogRef = useRef<HTMLDivElement>(null);
+  const catalogInnerRef = useRef<HTMLDivElement>(null);
+
   const draggingRef = useRef(false);
   const startXRef = useRef(0);
-  const trackRef = useRef<HTMLDivElement>(null);
-  const maxDrag = 220;
+  const xRef = useRef(0);
 
   const orderedCats = useMemo(() => [
     ...categories.map(c => c.name),
@@ -61,139 +94,304 @@ export default function MenuClient({ categories, products }: { categories: Categ
 
   const [active, setActive] = useState(() => orderedCats[0] || "");
   const items = products.filter(p => p.category === active);
+  const media = CATEGORY_MEDIA[active];
+  const featured = media ? items.find(p => p.name === media.anchor) || items[0] : null;
+  const regular = featured ? items.filter(p => p.id !== featured.id) : items;
 
   function reveal() {
     setRevealed(true);
     setTimeout(() => setSplashGone(true), 550);
   }
 
+  function maxSlide() {
+    if (!trackRef.current || !knobRef.current) return 0;
+    return Math.max(0, trackRef.current.clientWidth - knobRef.current.clientWidth - 8);
+  }
+
+  function updateKnob(x: number) {
+    xRef.current = x;
+    const max = maxSlide();
+    if (knobRef.current) knobRef.current.style.transform = `translateX(${x}px)`;
+    if (fillRef.current) fillRef.current.style.transform = `scaleX(${max ? x / max : 0})`;
+    if (labelRef.current) labelRef.current.style.opacity = String(1 - (max ? x / max : 0) * 1.3);
+  }
+
   function onPointerDown(e: React.PointerEvent) {
     draggingRef.current = true;
-    startXRef.current = e.clientX - drag;
+    startXRef.current = e.clientX - xRef.current;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   }
   function onPointerMove(e: React.PointerEvent) {
     if (!draggingRef.current) return;
-    const next = Math.min(maxDrag, Math.max(0, e.clientX - startXRef.current));
-    setDrag(next);
+    updateKnob(Math.min(maxSlide(), Math.max(0, e.clientX - startXRef.current)));
   }
-  function onPointerUp() {
+  function finishSlide() {
     if (!draggingRef.current) return;
     draggingRef.current = false;
-    if (drag > maxDrag * 0.55) { setDrag(maxDrag); reveal(); }
-    else setDrag(0);
+    const knob = knobRef.current, fill = fillRef.current, label = labelRef.current;
+    if (!knob || !fill || !label) return;
+    const max = maxSlide();
+    if (xRef.current > max * 0.62) {
+      animate(knob, { translateX: max, duration: 220, ease: "outExpo" });
+      xRef.current = max;
+      setTimeout(reveal, 160);
+    } else {
+      // único lugar con rebote real: es un gesto grande y poco frecuente,
+      // a diferencia del riel de categorías (ahí un rebote se siente mal
+      // porque se toca seguido — ver el efecto "outExpo" sin rebote abajo).
+      const bounce = spring({ stiffness: 120, damping: 12 });
+      animate(knob, { translateX: 0, duration: 650, ease: bounce });
+      animate(fill, { scaleX: 0, duration: 500, ease: "outExpo" });
+      animate(label, { opacity: 1, duration: 500, ease: "outExpo" });
+      xRef.current = 0;
+    }
+  }
+  function onTrackClick(e: React.MouseEvent) {
+    const knob = knobRef.current;
+    if (!knob || e.target === knob || draggingRef.current) return;
+    const max = maxSlide();
+    animate(knob, { translateX: max, duration: 220, ease: "outExpo" });
+    xRef.current = max;
+    setTimeout(reveal, 160);
+  }
+
+  // Entrada escalonada de la pantalla de bienvenida
+  useEffect(() => {
+    if (!rootRef.current) return;
+    const els = rootRef.current.querySelectorAll("." + styles.rise);
+    animate(els, {
+      opacity: [0, 1],
+      translateY: [16, 0],
+      duration: 700,
+      delay: stagger(90, { start: 60 }),
+      ease: "outExpo",
+    });
+  }, []);
+
+  // Indicador de categoría activa: se desliza a su posición SIN rebote
+  // (con rebote se ve raro en un control que se toca seguido — a diferencia
+  // del slider de arriba, que es un gesto grande y esporádico).
+  useLayoutEffect(() => {
+    const btn = btnRefs.current.get(active);
+    const indicator = indicatorRef.current;
+    if (!btn || !indicator) return;
+    indicator.style.opacity = "1";
+    animate(indicator, {
+      translateY: btn.offsetTop,
+      height: btn.offsetHeight,
+      duration: 420,
+      ease: "outExpo",
+    });
+  }, [active, switching]);
+
+  // Entrada escalonada de las tarjetas del catálogo, en cada cambio de categoría
+  useEffect(() => {
+    if (switching || !catalogInnerRef.current) return;
+    const els = catalogInnerRef.current.querySelectorAll("[data-anim-card]");
+    animate(els, {
+      opacity: [0, 1],
+      translateY: [14, 0],
+      duration: 480,
+      delay: stagger(55, { start: 60 }),
+      ease: "outExpo",
+    });
+  }, [active, switching]);
+
+  function selectCategory(cat: string) {
+    if (cat === active || switching) return;
+    setSwitching(true);
+    setTimeout(() => {
+      setActive(cat);
+      setSwitching(false);
+      catalogRef.current?.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+    }, 220);
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: `radial-gradient(ellipse at 50% -10%, rgba(122,30,58,0.35), transparent 55%), linear-gradient(160deg, ${INK} 0%, ${MAROON} 55%, ${INK} 100%)`, display: "flex", justifyContent: "center", fontFamily: SANS }}>
-      <div style={{ width: "100%", maxWidth: 480, minHeight: "100vh", position: "relative", overflow: "hidden", boxShadow: "0 40px 100px rgba(0,0,0,0.5)" }}>
-
-        {/* ── SPLASH ─────────────────────────────────────── */}
-        {!splashGone && (
-          <div
-            style={{
-              position: "absolute", inset: 0, zIndex: 20,
-              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-              padding: "40px 28px", textAlign: "center",
-              backgroundImage: "radial-gradient(rgba(181,137,74,0.14) 1px, transparent 1px)",
-              backgroundSize: "18px 18px",
-              transition: "opacity .5s ease, transform .5s ease",
-              opacity: revealed ? 0 : 1,
-              transform: revealed ? "translateY(-24px)" : "translateY(0)",
-              pointerEvents: revealed ? "none" : "auto",
-            }}
-          >
-            <div style={{ width: 108, height: 108, borderRadius: 26, padding: 6, background: "linear-gradient(145deg, rgba(122,30,58,0.55), rgba(181,137,74,0.25))", border: "1px solid rgba(181,137,74,0.3)", boxShadow: "0 20px 50px rgba(0,0,0,0.45)", marginBottom: 26 }}>
-              <img src="/logo.jpg" alt="Cabane Sandwiches" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 20, display: "block" }} />
-            </div>
-            <h1 style={{ fontFamily: SERIF, color: CREAM, fontSize: 30, fontWeight: 700, margin: 0, letterSpacing: "0.01em" }}>Cabane Sandwiches</h1>
-            <div style={{ width: 46, height: 2, background: GOLD, opacity: 0.6, margin: "16px 0" }} />
-            <p style={{ color: MUTED, fontSize: 12.5, fontWeight: 700, letterSpacing: "0.28em", textTransform: "uppercase", margin: 0 }}>Sánduches artesanales</p>
-
-            <div
-              ref={trackRef}
-              onClick={() => { if (!draggingRef.current) reveal(); }}
-              style={{ marginTop: 48, width: 260, height: 58, borderRadius: 29, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(181,137,74,0.3)", position: "relative", cursor: "pointer", overflow: "hidden" }}
-            >
-              <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ color: "rgba(232,213,183,0.7)", fontSize: 13, fontWeight: 700, letterSpacing: "0.04em" }}>Deslizá para ver el menú</span>
+    <div ref={rootRef} className={styles.root}>
+      {/* ── SPLASH ─────────────────────────────────────── */}
+      {!splashGone && (
+        <section className={`${styles.screen} ${styles.splash} ${revealed ? styles.screenHidden : ""}`}>
+          <div className={styles.splashPhotoWrap}>
+            <img
+              src="/menu-hero.jpg"
+              alt="Sánduche Cabane recién armado"
+              className={styles.splashPhoto}
+              ref={fadeInImgRef}
+              onLoad={(e) => e.currentTarget.classList.add(styles.loaded)}
+            />
+          </div>
+          <div className={styles.splashOverlay} />
+          <div className={styles.splashContent}>
+            <header className={`${styles.splashHead} ${styles.rise}`}>
+              <div className={styles.brandLockup}>
+                <div className={styles.brandLogo}>
+                  <img src="/logo.jpg" alt="Cabane Sandwiches" />
+                </div>
+                <div className={styles.brandCopy}>
+                  <strong>Cabane</strong>
+                  <span>Sandwiches</span>
+                </div>
               </div>
-              <div
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={onPointerUp}
-                onPointerCancel={onPointerUp}
-                style={{
-                  position: "absolute", top: 3, left: 3, width: 50, height: 50, borderRadius: "50%",
-                  background: `linear-gradient(150deg, ${WINE}, #5a1729)`, display: "flex", alignItems: "center", justifyContent: "center",
-                  transform: `translateX(${drag}px)`, transition: draggingRef.current ? "none" : "transform .3s ease",
-                  boxShadow: "0 6px 18px rgba(122,30,58,0.5)", touchAction: "none",
-                }}
+              <button className={styles.ghostBtn} aria-label="Información" onClick={() => setDrawerOpen(true)}>
+                <svg viewBox="0 0 24 24" width={20} height={20} fill="none" stroke="currentColor" strokeWidth={1.8}><circle cx="12" cy="12" r="9"/><path d="M12 10v6M12 7h.01"/></svg>
+              </button>
+            </header>
+
+            <div className={styles.heroCopy}>
+              <div className={`${styles.kicker} ${styles.rise}`}>Menú visual</div>
+              <h1 className={styles.rise}>Sánduches <em>con carácter.</em></h1>
+              <p className={styles.rise}>Explorá el menú, conocé cada preparación y encontrá tu próximo favorito.</p>
+            </div>
+
+            <div className={`${styles.slideWrap} ${styles.rise}`}>
+              <div ref={trackRef} className={styles.slideTrack} onClick={onTrackClick}>
+                <div ref={fillRef} className={styles.slideFill} />
+                <div ref={labelRef} className={styles.slideLabel}>Deslizá para ver el menú</div>
+                <div
+                  ref={knobRef}
+                  className={styles.slideKnob}
+                  onPointerDown={onPointerDown}
+                  onPointerMove={onPointerMove}
+                  onPointerUp={finishSlide}
+                  onPointerCancel={finishSlide}
+                  style={{ touchAction: "none" }}
+                >
+                  <svg viewBox="0 0 24 24" width={22} height={22} fill="none" stroke="currentColor" strokeWidth={2}><path d="M7 12h10M13 8l4 4-4 4"/></svg>
+                </div>
+              </div>
+            </div>
+
+            <div className={`${styles.quickLinks} ${styles.rise}`}>
+              <button className={styles.quickLink} onClick={() => setDrawerOpen(true)}>
+                <svg viewBox="0 0 24 24" width={15} height={15} fill="none" stroke="currentColor" strokeWidth={1.8}><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.4"/></svg>
+                Ubicación
+              </button>
+              <button className={styles.quickLink} onClick={() => setDrawerOpen(true)}>
+                <svg viewBox="0 0 24 24" width={15} height={15} fill="none" stroke="currentColor" strokeWidth={1.8}><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                Horarios
+              </button>
+              <button className={styles.quickLink} onClick={() => window.open("https://www.instagram.com/cabanesandwiches.ec/?hl=es", "_blank")}>
+                <svg viewBox="0 0 24 24" width={15} height={15} fill="none" stroke="currentColor" strokeWidth={1.8}><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r=".8" fill="currentColor"/></svg>
+                Instagram
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ── MENÚ ───────────────────────────────────────── */}
+      <section className={`${styles.screen} ${styles.menu} ${!revealed ? styles.screenHidden : ""}`}>
+        <header className={styles.menuTop}>
+          <div className={styles.menuBrand}>
+            <div className={styles.menuLogo}><img src="/logo.jpg" alt="" /></div>
+            <div className={styles.menuTitle}>
+              <strong>Cabane Sandwiches</strong>
+              <span>Menú del restaurante</span>
+            </div>
+          </div>
+          <div className={styles.menuActions}>
+            <button className={styles.roundBtn} aria-label="Inicio" onClick={() => setRevealed(false)}>
+              <svg viewBox="0 0 24 24" width={19} height={19} fill="none" stroke="currentColor" strokeWidth={1.8}><path d="m4 11 8-7 8 7v8a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1Z"/></svg>
+            </button>
+            <button className={styles.roundBtn} aria-label="Información" onClick={() => setDrawerOpen(true)}>
+              <svg viewBox="0 0 24 24" width={20} height={20} fill="none" stroke="currentColor" strokeWidth={1.8}><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <div className={styles.menuBody}>
+          <nav ref={railRef} className={styles.categoryRail}>
+            <div ref={indicatorRef} className={styles.railIndicator} />
+            {orderedCats.map(cat => (
+              <button
+                key={cat}
+                ref={(el) => { if (el) btnRefs.current.set(cat, el); }}
+                className={`${styles.categoryBtn} ${cat === active ? styles.categoryBtnActive : ""}`}
+                onClick={() => selectCategory(cat)}
               >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 5l7 7-7 7"/></svg>
+                <CategoryIcon name={cat} />
+                <span>{cat}</span>
+              </button>
+            ))}
+          </nav>
+
+          <section ref={catalogRef} className={styles.catalog}>
+            <div ref={catalogInnerRef} style={{ opacity: switching ? 0 : 1, transform: switching ? "translateY(10px) scale(.985)" : "none", transition: "opacity .32s var(--ease,ease), transform .38s var(--ease,ease)" }}>
+              <div className={styles.catalogHeading}>
+                <div>
+                  <h2>{active}</h2>
+                  <p>Conocé nuestras preparaciones.</p>
+                </div>
+                <span className={styles.countPill}>{items.length} producto{items.length === 1 ? "" : "s"}</span>
               </div>
-            </div>
-          </div>
-        )}
 
-        {/* ── MENÚ ───────────────────────────────────────── */}
-        <div style={{ opacity: revealed ? 1 : 0, transform: revealed ? "translateY(0)" : "translateY(24px)", transition: "opacity .5s ease .1s, transform .5s ease .1s", display: "flex", flexDirection: "column", minHeight: "100vh" }}>
-
-          {/* Header */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "18px 18px 14px", borderBottom: "1px solid rgba(181,137,74,0.18)" }}>
-            <img src="/logo.jpg" alt="" style={{ width: 34, height: 34, borderRadius: 9, objectFit: "cover" }} />
-            <div style={{ minWidth: 0 }}>
-              <p style={{ fontFamily: SERIF, color: CREAM, fontSize: 16, fontWeight: 700, margin: 0, lineHeight: 1.1 }}>Cabane Sandwiches</p>
-              <p style={{ color: MUTED, fontSize: 10.5, fontWeight: 700, letterSpacing: "0.18em", textTransform: "uppercase", margin: "2px 0 0" }}>Menú</p>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-            {/* Riel de categorías */}
-            <nav style={{ width: 78, flexShrink: 0, borderRight: "1px solid rgba(181,137,74,0.18)", overflowY: "auto", padding: "10px 6px" }}>
-              {orderedCats.map(cat => {
-                const isActive = cat === active;
-                return (
-                  <button
-                    key={cat}
-                    onClick={() => setActive(cat)}
-                    style={{
-                      width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: 6,
-                      padding: "12px 4px", marginBottom: 4, borderRadius: 14, border: "none", cursor: "pointer",
-                      background: isActive ? "rgba(181,137,74,0.16)" : "transparent",
-                      color: isActive ? GOLD : "rgba(232,213,183,0.45)",
-                      fontFamily: SANS, transition: "background .15s, color .15s",
-                    }}
-                  >
-                    <CategoryIcon name={cat} />
-                    <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", lineHeight: 1.15, textAlign: "center" }}>{cat}</span>
-                  </button>
-                );
-              })}
-            </nav>
-
-            {/* Lista de productos */}
-            <div style={{ flex: 1, overflowY: "auto", padding: "20px 20px 48px" }}>
-              <h2 style={{ fontFamily: SERIF, color: CREAM, fontSize: 22, fontWeight: 700, margin: "0 0 4px" }}>{active}</h2>
-              <p style={{ color: MUTED, fontSize: 11.5, fontWeight: 600, margin: "0 0 20px" }}>{items.length} producto{items.length !== 1 ? "s" : ""}</p>
-
-              <div style={{ display: "flex", flexDirection: "column" }}>
-                {items.map((p, i) => (
-                  <div key={p.id} style={{ padding: "16px 0", borderTop: i === 0 ? "none" : "1px solid rgba(181,137,74,0.14)" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 14 }}>
-                      <p style={{ color: PAPER, fontSize: 15.5, fontWeight: 700, margin: 0 }}>{p.name}</p>
-                      <span style={{ color: GOLD, fontSize: 15, fontWeight: 900, whiteSpace: "nowrap", flexShrink: 0 }}>{$(p.price)}</span>
+              {featured && (
+                <article key={active} className={styles.featureCard} data-anim-card>
+                  {media && (
+                    <img
+                      src={media.image}
+                      alt={featured.name}
+                      ref={fadeInImgRef}
+                      onLoad={(e) => e.currentTarget.classList.add(styles.loaded)}
+                    />
+                  )}
+                  <div className={styles.featureContent}>
+                    <span className={styles.featureTag}>Recomendado</span>
+                    <h3>{featured.name}</h3>
+                    {featured.description && <p>{featured.description}</p>}
+                    <div className={styles.featureBottom}>
+                      <span className={styles.featurePrice}>{$(featured.price)}</span>
                     </div>
-                    {p.description && <p style={{ color: MUTED, fontSize: 12.5, fontWeight: 500, margin: "5px 0 0", lineHeight: 1.5 }}>{p.description}</p>}
+                  </div>
+                </article>
+              )}
+
+              <div className={styles.productList}>
+                {regular.map((p) => (
+                  <div key={p.id} className={styles.productCard} data-anim-card>
+                    <div className={styles.productCopy}>
+                      <small>{p.category}</small>
+                      <h3>{p.name}</h3>
+                      {p.description && <p>{p.description}</p>}
+                      <div className={styles.productMeta}>
+                        <span className={styles.productPrice}>{$(p.price)}</span>
+                      </div>
+                    </div>
                   </div>
                 ))}
-                {!items.length && <p style={{ color: MUTED, fontSize: 13, fontWeight: 600 }}>Sin productos en esta categoría por ahora.</p>}
+                {!items.length && <div className={styles.emptyState}>Sin productos en esta categoría por ahora.</div>}
               </div>
-
-              <p style={{ textAlign: "center", color: "rgba(232,213,183,0.25)", fontSize: 10.5, fontWeight: 600, marginTop: 32 }}>Precios sujetos a cambio sin previo aviso.</p>
             </div>
-          </div>
+          </section>
         </div>
+      </section>
+
+      {/* ── INFO DRAWER ────────────────────────────────── */}
+      <div className={`${styles.drawerLayer} ${drawerOpen ? styles.drawerLayerOpen : ""}`} onClick={(e) => { if (e.target === e.currentTarget) setDrawerOpen(false); }}>
+        <aside className={styles.drawer} aria-label="Información de Cabane">
+          <div className={styles.drawerTop}>
+            <div className={styles.brandCopy}><strong>Cabane</strong><span>Sandwiches</span></div>
+            <button className={styles.closeBtn} aria-label="Cerrar" onClick={() => setDrawerOpen(false)}>
+              <svg viewBox="0 0 24 24" width={20} height={20} fill="none" stroke="currentColor" strokeWidth={1.8}><path d="m6 6 12 12M18 6 6 18"/></svg>
+            </button>
+          </div>
+          <h2>Visitanos y disfrutá.</h2>
+          <p className={styles.drawerLead}>Un menú pensado para que explores cada preparación antes de ordenar en el local.</p>
+          <div className={styles.infoBlock}><small>Ubicación</small><strong>Ibarra, Ecuador</strong></div>
+          <div className={styles.infoBlock}><small>Horario</small><strong>Consultá el horario actualizado en Instagram.</strong></div>
+          <div className={styles.infoBlock}><small>Cómo pedir</small><strong>Solicitá tu orden directamente al personal del restaurante.</strong></div>
+          <div className={styles.socialRow}>
+            <button className={styles.socialBtn} onClick={() => window.open("https://www.instagram.com/cabanesandwiches.ec/?hl=es", "_blank")}>
+              <svg viewBox="0 0 24 24" width={17} height={17} fill="none" stroke="currentColor" strokeWidth={1.8}><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r=".8" fill="currentColor"/></svg>
+              Instagram
+            </button>
+            <button className={styles.socialBtn} onClick={() => setDrawerOpen(false)}>
+              <svg viewBox="0 0 24 24" width={17} height={17} fill="none" stroke="currentColor" strokeWidth={1.8}><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+              Ver menú
+            </button>
+          </div>
+        </aside>
       </div>
     </div>
   );
