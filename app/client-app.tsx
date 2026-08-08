@@ -301,6 +301,13 @@ export default function App() {
   // selector a los productos de ESE pedido y se ata la merma a él.
   const [wasteOrderCtx, setWasteOrderCtx] = useState<Order|null>(null);
   const [wasteMsg, setWasteMsg] = useState("");
+  // Fase 17: cambiar un producto por otro en un pedido ya enviado (ej: no
+  // había ingredientes para hacerlo) — solo mientras el pedido entero sigue
+  // "enviado" (nada arrancó a prepararse) y sin cobros registrados.
+  const [swapTarget, setSwapTarget] = useState<{order:Order; item:OrderItem}|null>(null);
+  const [swapProductId, setSwapProductId] = useState("");
+  const [swapSaving, setSwapSaving] = useState(false);
+  const [swapError, setSwapError] = useState("");
   const [notifPermission, setNotifPermission] = useState<NotificationPermission|"unsupported">("default");
   const [wasteSaving, setWasteSaving] = useState(false);
   // Fase 4: gastos, gastos fijos e historial de pedidos
@@ -1312,6 +1319,25 @@ export default function App() {
     setUpdating(null);
   }
 
+  // Fase 17: cambiar producto de un pedido ya enviado (no había ingredientes
+  // para hacer el original). No toca inventario: nunca se llegó a preparar.
+  async function submitSwap() {
+    if (!swapTarget || !swapProductId) return;
+    setSwapSaving(true); setSwapError("");
+    const { data, error } = await getDB().rpc("swap_order_item", {
+      p_order_id: swapTarget.order.id,
+      p_order_item_id: swapTarget.item.id,
+      p_new_product_id: swapProductId,
+    });
+    setSwapSaving(false);
+    if (error) { setSwapError(error.message); return; }
+    if (data && data.ok === false) { setSwapError(data.error || "No se pudo cambiar el producto"); return; }
+    setSwapTarget(null); setSwapProductId("");
+    loadWaiterOrders();
+    loadKitchen("kitchen");
+    loadKitchen("bar");
+  }
+
   async function loadInventory() {
     const [{ data: ingr }, { data: rec }] = await Promise.all([
       getDB().from("ingredients").select("*").order("name"),
@@ -1983,9 +2009,18 @@ export default function App() {
                             <span style={{fontSize:10,fontWeight:700,color:"#8A6210",background:"rgba(181,137,74,0.18)",borderRadius:99,padding:"2px 8px"}}>{statusLabel[o.status]||o.status}</span>
                           </div>
                           {(o.order_items||[]).map(i=>(
-                            <p key={i.id} style={{fontSize:12,fontWeight:600,color:MUTED,paddingLeft:4,margin:"2px 0"}}>
-                              {i.quantity}× {i.product_name}{i.notes?` — ${i.notes}`:""}
-                            </p>
+                            <div key={i.id} style={{display:"flex",alignItems:"center",gap:6,paddingLeft:4,margin:"2px 0"}}>
+                              <p style={{fontSize:12,fontWeight:600,color:MUTED,margin:0,flex:1}}>
+                                {i.quantity}× {i.product_name}{i.notes?` — ${i.notes}`:""}
+                              </p>
+                              {o.status==="enviado" && (
+                                <button title="No hay ingredientes para este producto — cambiarlo por otro"
+                                  onClick={()=>{setSwapTarget({order:o,item:i});setSwapProductId("");setSwapError("");}}
+                                  style={{width:22,height:22,borderRadius:7,border:"none",cursor:"pointer",background:"rgba(181,137,74,0.16)",color:"#8A6210",fontSize:11,fontFamily:FONT,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                                  🔄
+                                </button>
+                              )}
+                            </div>
                           ))}
                           {!(o.order_items||[]).length && <p style={{fontSize:12,color:MUTED,fontWeight:600,paddingLeft:4}}>Sin detalle de items</p>}
                         </div>
@@ -2280,6 +2315,13 @@ export default function App() {
                             <span>{i.quantity}× {i.product_name}</span>
                             <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
                               <span style={{fontWeight:800}}>{$(i.quantity*i.unit_price)}</span>
+                              {o.status==="enviado" && (
+                                <button title="No hay ingredientes para este producto — cambiarlo por otro"
+                                  onClick={()=>{setSwapTarget({order:o,item:i});setSwapProductId("");setSwapError("");}}
+                                  style={{width:26,height:26,borderRadius:8,border:"none",cursor:"pointer",background:"rgba(181,137,74,0.16)",color:"#8A6210",fontSize:13,fontFamily:FONT,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                                  🔄
+                                </button>
+                              )}
                               {i.product_id && (
                                 <button title="Se quemó / cayó / etc. — dar de baja este producto"
                                   onClick={()=>{setWasteOrderCtx(o);setNewWaste({product_id:i.product_id,quantity:String(i.quantity),reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
@@ -3938,6 +3980,62 @@ export default function App() {
                 {wasteOrderCtx
                   ? "El pedido sigue igual y se cobra normal — esto solo registra el costo del producto para volver a hacerlo."
                   : "Se descuenta el inventario de sus ingredientes (si el producto tiene receta)."}
+              </p>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── FASE 17: CAMBIAR PRODUCTO DE UN PEDIDO YA ENVIADO ──────── */}
+      {swapTarget && (()=>{
+        const swapProducts = products.filter(p=>p.id!==swapTarget.item.product_id);
+        const chosen = swapProducts.find(p=>p.id===swapProductId);
+        const newTotal = swapTarget.order.total - swapTarget.item.quantity*swapTarget.item.unit_price + (chosen ? swapTarget.item.quantity*chosen.price : 0);
+        const closeSwap = () => { setSwapTarget(null); setSwapProductId(""); setSwapError(""); };
+        return (
+          <div onClick={e=>{if(e.target===e.currentTarget)closeSwap()}}
+            style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
+            <div style={{...card,padding:20,width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+                <div>
+                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Cambiar producto</p>
+                  <p style={{fontSize:20,fontWeight:900,color:DARK}}>#{swapTarget.order.order_number} · {swapTarget.order.table_label}</p>
+                </div>
+                <button onClick={closeSwap}
+                  style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
+              </div>
+
+              <div style={{background:CREAM,borderRadius:10,padding:"10px 14px",marginBottom:14}}>
+                <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Se va a reemplazar</p>
+                <p style={{fontSize:15,fontWeight:800,color:DARK}}>{swapTarget.item.quantity}× {swapTarget.item.product_name}</p>
+              </div>
+
+              <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:8}}>Nuevo producto</p>
+              <select value={swapProductId} onChange={e=>setSwapProductId(e.target.value)}
+                style={{width:"100%",padding:"12px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:14}}>
+                <option value="">— Elegir producto —</option>
+                {catsFor(swapProducts).map(cat=>{
+                  const prods = swapProducts.filter(p=>p.category===cat);
+                  if (!prods.length) return null;
+                  return <optgroup key={cat} label={cat}>{prods.map(p=><option key={p.id} value={p.id}>{p.name} — {$(p.price)}</option>)}</optgroup>;
+                })}
+              </select>
+
+              {chosen && (
+                <div style={{background:"rgba(58,124,80,0.08)",border:"1px solid rgba(58,124,80,0.25)",borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between"}}>
+                  <span style={{fontSize:13,fontWeight:700,color:MUTED}}>Nuevo total del pedido</span>
+                  <span style={{fontSize:15,fontWeight:900,color:GREEN}}>{$(newTotal)}</span>
+                </div>
+              )}
+
+              {swapError && <p style={{fontSize:13,fontWeight:700,color:ALERT_RED,marginBottom:12}}>{swapError}</p>}
+
+              <button disabled={!swapProductId||swapSaving} onClick={submitSwap}
+                style={{...btn(DARK,"#fff",!swapProductId||swapSaving),width:"100%",height:52,fontSize:15}}>
+                {swapSaving?"Guardando…":"Cambiar producto"}
+              </button>
+              <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:10}}>
+                No se descuenta ni repone inventario — el producto original nunca se llegó a preparar.
               </p>
             </div>
           </div>
