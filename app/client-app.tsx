@@ -56,7 +56,7 @@ interface Waste { id: string; product_name: string; quantity: number; unit_price
 interface Expense { id: string; category: string; description: string; amount: number; expense_date: string; creator_name?: string; created_at: string }
 interface FixedExpense { id: string; name: string; category: string; amount: number; active: boolean }
 interface Payment { order_id: string; method: string; amount: number; created_at?: string; charged_by?: string; charger_name?: string }
-interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[]; expensesTotal:number; fixedTotal:number; wasteTotal:number; staffTotal:number; prevRevenue:number; prevCount:number; categoryBreakdown:{name:string;revenue:number}[]; expenseBreakdown:{name:string;amount:number}[]; weekdayData:number[] }
+interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[]; expensesTotal:number; fixedTotal:number; wasteTotal:number; staffTotal:number; prevRevenue:number; prevCount:number; categoryBreakdown:{name:string;qty:number;revenue:number}[]; expenseBreakdown:{name:string;amount:number}[]; weekdayData:number[] }
 
 // Sonido de pedido nuevo: un <audio> real con un archivo precargado, en vez
 // de sintetizar el tono con Web Audio — en varios navegadores de celular
@@ -812,12 +812,14 @@ export default function App() {
     // ¿De dónde vienen las ventas? — ingresos por categoría del menú
     const catOf: Record<string,string> = {};
     (prodCats||[]).forEach((p:{id:string;category:string}) => { catOf[p.id]=p.category; });
-    const catMap: Record<string,number> = {};
+    const catMap: Record<string,{qty:number;revenue:number}> = {};
     (items||[]).forEach((i:{product_id:string;quantity:number;unit_price:number}) => {
       const c = catOf[i.product_id]||"Otros";
-      catMap[c]=(catMap[c]||0)+i.quantity*i.unit_price;
+      if (!catMap[c]) catMap[c]={qty:0,revenue:0};
+      catMap[c].qty+=i.quantity;
+      catMap[c].revenue+=i.quantity*i.unit_price;
     });
-    const categoryBreakdown = Object.entries(catMap).map(([name,revenue])=>({name,revenue})).sort((a,b)=>b.revenue-a.revenue);
+    const categoryBreakdown = Object.entries(catMap).map(([name,{qty,revenue}])=>({name,qty,revenue})).sort((a,b)=>b.revenue-a.revenue);
 
     // Ventas por día de la semana (lunes primero)
     const weekdayData = Array(7).fill(0);
@@ -2565,8 +2567,8 @@ export default function App() {
                     ].sort((a,b)=>b.amount-a.amount).forEach(r=>rows.push([r.name, r.amount.toFixed(2)]));
                     rows.push([]);
                     rows.push(["¿De dónde vienen las ventas?"]);
-                    rows.push(["Categoría","Facturado"]);
-                    s.categoryBreakdown.forEach(r=>rows.push([r.name, r.revenue.toFixed(2)]));
+                    rows.push(["Categoría","Unidades vendidas","Facturado"]);
+                    s.categoryBreakdown.forEach(r=>rows.push([r.name, r.qty, r.revenue.toFixed(2)]));
                     rows.push([]);
                     rows.push(["Top productos"]);
                     rows.push(["Producto","Unidades","Facturado"]);
@@ -2737,7 +2739,7 @@ export default function App() {
                         <div key={r.name}>
                           <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
                             <span style={{fontSize:13,fontWeight:700,color:DARK}}>{r.name}</span>
-                            <span style={{fontSize:13,fontWeight:900,color:i===0?RED:DARK}}>{$(r.revenue)} <span style={{color:MUTED,fontWeight:700}}>({total?Math.round(r.revenue/total*100):0}%)</span></span>
+                            <span style={{fontSize:13,fontWeight:900,color:i===0?RED:DARK}}>{r.qty} uds · {$(r.revenue)} <span style={{color:MUTED,fontWeight:700}}>({total?Math.round(r.revenue/total*100):0}%)</span></span>
                           </div>
                           <div style={{height:8,background:CREAM,borderRadius:4,overflow:"hidden"}}>
                             <div style={{height:"100%",width:`${total?(r.revenue/total)*100:0}%`,background:i===0?RED:GOLD,borderRadius:4}}/>
