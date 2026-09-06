@@ -56,7 +56,7 @@ interface Waste { id: string; product_name: string; quantity: number; unit_price
 interface Expense { id: string; category: string; description: string; amount: number; expense_date: string; creator_name?: string; created_at: string }
 interface FixedExpense { id: string; name: string; category: string; amount: number; active: boolean }
 interface Payment { order_id: string; method: string; amount: number; created_at?: string; charged_by?: string; charger_name?: string }
-interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[]; expensesTotal:number; fixedTotal:number; wasteTotal:number; staffTotal:number; prevRevenue:number; prevCount:number; categoryBreakdown:{name:string;qty:number;revenue:number}[]; expenseBreakdown:{name:string;amount:number}[]; weekdayData:number[] }
+interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:number; monthCount:number; topProducts:{name:string;qty:number;revenue:number}[]; payBreakdown:{efectivo:number;tarjeta:number;transferencia:number}; hourlyData:number[]; expensesTotal:number; fixedTotal:number; wasteTotal:number; staffTotal:number; prevRevenue:number; prevCount:number; categoryBreakdown:{name:string;qty:number;revenue:number;products:{name:string;qty:number;revenue:number}[]}[]; expenseBreakdown:{name:string;amount:number}[]; weekdayData:number[] }
 
 // Sonido de pedido nuevo: un <audio> real con un archivo precargado, en vez
 // de sintetizar el tono con Web Audio — en varios navegadores de celular
@@ -192,13 +192,16 @@ input,select,textarea{min-width:0;max-width:100%;box-sizing:border-box}
 
 /* Admin: dos columnas en desktop (formularios a la izquierda, contenido a la derecha) */
 .admin-2col{display:block}
-.stats-2col{display:block}
+.stats-2col{display:flex;flex-direction:column}
 .admin-2col-r{display:block}
+.stats-left,.stats-left-core,.stats-right,.stats-charts{min-width:0}
+.stats-left{display:contents}.stats-left-core{order:1}.stats-right{order:2}.stats-charts{order:3}
 @media(min-width:1000px){
   .admin-2col{display:grid;grid-template-columns:400px minmax(0,1fr);gap:20px;align-items:start}
   .admin-2col-r{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:20px;align-items:start}
   .admin-side{position:sticky;top:76px}
   .stats-2col{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  .stats-left{display:block}
 }
 `;
 
@@ -242,6 +245,7 @@ export default function App() {
   const [itemPayError, setItemPayError] = useState("");
   const [partiallyPaidOrders, setPartiallyPaidOrders] = useState<Set<string>>(new Set());
   const [adminStats, setAdminStats] = useState<AdminStats|null>(null);
+  const [selectedReportCategory, setSelectedReportCategory] = useState<string|null>(null);
   const [adminProducts, setAdminProducts] = useState<Product[]>([]);
   const [adminSection, setAdminSection] = useState<"stats"|"products"|"notes"|"inventory"|"users"|"waste"|"expenses"|"history"|"config">("stats");
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
@@ -791,7 +795,7 @@ export default function App() {
       getDB().from("fixed_expenses").select("amount").eq("active",true),
       getDB().from("waste").select("quantity,unit_price,reason").gte("created_at",start).lt("created_at",end),
       getDB().from("orders").select("total").eq("payment_status","paid").gte("created_at",prevStart).lt("created_at",start),
-      getDB().from("products").select("id,category"),
+      getDB().from("products").select("id,name,category,is_active"),
     ]);
 
     const expensesTotal = (exRows||[]).reduce((s:number,e:{amount:number})=>s+e.amount,0);
@@ -811,15 +815,31 @@ export default function App() {
 
     // ¿De dónde vienen las ventas? — ingresos por categoría del menú
     const catOf: Record<string,string> = {};
-    (prodCats||[]).forEach((p:{id:string;category:string}) => { catOf[p.id]=p.category; });
+    const activeProductsByCategory: Record<string,{name:string;qty:number;revenue:number}[]> = {};
+    (prodCats||[]).forEach((p:{id:string;name:string;category:string;is_active:boolean}) => {
+      catOf[p.id]=p.category;
+      if (p.is_active) (activeProductsByCategory[p.category]||=[]).push({name:p.name,qty:0,revenue:0});
+    });
     const catMap: Record<string,{qty:number;revenue:number}> = {};
-    (items||[]).forEach((i:{product_id:string;quantity:number;unit_price:number}) => {
+    const productMap: Record<string,Record<string,{qty:number;revenue:number}>> = {};
+    (items||[]).forEach((i:{product_id:string;product_name:string;quantity:number;unit_price:number}) => {
       const c = catOf[i.product_id]||"Otros";
       if (!catMap[c]) catMap[c]={qty:0,revenue:0};
       catMap[c].qty+=i.quantity;
       catMap[c].revenue+=i.quantity*i.unit_price;
+      if (!productMap[c]) productMap[c]={};
+      if (!productMap[c][i.product_name]) productMap[c][i.product_name]={qty:0,revenue:0};
+      productMap[c][i.product_name].qty+=i.quantity;
+      productMap[c][i.product_name].revenue+=i.quantity*i.unit_price;
     });
-    const categoryBreakdown = Object.entries(catMap).map(([name,{qty,revenue}])=>({name,qty,revenue})).sort((a,b)=>b.revenue-a.revenue);
+    const categoryBreakdown = Object.entries(catMap).map(([name,{qty,revenue}])=>({
+      name, qty, revenue,
+      products:[
+        ...(activeProductsByCategory[name]||[]).map(product=>({...product,...(productMap[name]?.[product.name]||{})})),
+        ...Object.entries(productMap[name]||{}).filter(([productName])=>!(activeProductsByCategory[name]||[]).some(product=>product.name===productName)).map(([productName,product])=>({name:productName,...product})),
+      ]
+        .sort((a,b)=>b.revenue-a.revenue||b.qty-a.qty||a.name.localeCompare(b.name)),
+    })).sort((a,b)=>b.revenue-a.revenue);
 
     // Ventas por día de la semana (lunes primero)
     const weekdayData = Array(7).fill(0);
@@ -2569,6 +2589,12 @@ export default function App() {
                     rows.push(["¿De dónde vienen las ventas?"]);
                     rows.push(["Categoría","Unidades vendidas","Facturado"]);
                     s.categoryBreakdown.forEach(r=>rows.push([r.name, r.qty, r.revenue.toFixed(2)]));
+                    s.categoryBreakdown.forEach(r=>{
+                      rows.push([]);
+                      rows.push([`Productos — ${r.name}`]);
+                      rows.push(["Producto","Unidades vendidas","Facturado","% del total de categoría"]);
+                      r.products.forEach(p=>rows.push([p.name, p.qty, p.revenue.toFixed(2), `${r.revenue?Math.round(p.revenue/r.revenue*100):0}%`]));
+                    });
                     rows.push([]);
                     rows.push(["Top productos"]);
                     rows.push(["Producto","Unidades","Facturado"]);
@@ -2617,7 +2643,8 @@ export default function App() {
               })()}
 
               <div className="stats-2col">
-              <div>
+              <div className="stats-left">
+              <div className="stats-left-core">
               {/* Transferencia */}
               <div style={{...card,padding:14,marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <p style={{fontSize:13,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em"}}>Transferencia</p>
@@ -2725,51 +2752,7 @@ export default function App() {
               )}
               </div>
 
-              <div>
-              {/* Ventas por categoría — de dónde vienen las ganancias */}
-              {(()=>{
-                const rows = adminStats?.categoryBreakdown||[];
-                const total = rows.reduce((s,r)=>s+r.revenue,0);
-                if (!rows.length) return null;
-                return (
-                  <div style={{...card,padding:16,marginBottom:16}}>
-                    <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:12}}>¿De dónde vienen las ventas?</p>
-                    <div style={{display:"flex",flexDirection:"column" as const,gap:10}}>
-                      {rows.map((r,i)=>(
-                        <div key={r.name}>
-                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                            <span style={{fontSize:13,fontWeight:700,color:DARK}}>{r.name}</span>
-                            <span style={{fontSize:13,fontWeight:900,color:i===0?RED:DARK}}>{r.qty} uds · {$(r.revenue)} <span style={{color:MUTED,fontWeight:700}}>({total?Math.round(r.revenue/total*100):0}%)</span></span>
-                          </div>
-                          <div style={{height:8,background:CREAM,borderRadius:4,overflow:"hidden"}}>
-                            <div style={{height:"100%",width:`${total?(r.revenue/total)*100:0}%`,background:i===0?RED:GOLD,borderRadius:4}}/>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* Top productos */}
-              <div style={{...card,padding:16}}>
-                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Top productos</p>
-                {(adminStats?.topProducts||[]).length===0 ? (
-                  <p style={{fontSize:14,color:MUTED,fontWeight:600}}>Sin datos aún</p>
-                ) : (
-                  <div style={{display:"flex",flexDirection:"column" as const,gap:8}}>
-                    {(adminStats?.topProducts||[]).map((p,i)=>(
-                      <div key={p.name} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",background:i===0?`rgba(122,30,58,0.06)`:CREAM,borderRadius:10}}>
-                        <span style={{fontSize:13,fontWeight:900,color:MUTED,minWidth:20}}>{i+1}</span>
-                        <span style={{flex:1,fontSize:14,fontWeight:700,color:DARK}}>{p.name}</span>
-                        <span style={{fontSize:13,fontWeight:700,color:MUTED}}>{p.qty} uds</span>
-                        <span style={{fontSize:15,fontWeight:900,color:RED}}>{$(p.revenue)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
+              <div className="stats-charts">
               {/* Gráfica ventas por hora */}
               <div style={{...card,padding:16,marginTop:16}}>
                 <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:16}}>Ventas por hora — {periodLabel()}</p>
@@ -2817,6 +2800,65 @@ export default function App() {
                   </div>
                 );
               })()}
+              </div>
+              </div>
+
+              <div className="stats-right">
+              {/* Ventas por categoría — de dónde vienen las ganancias */}
+              {(()=>{
+                const rows = adminStats?.categoryBreakdown||[];
+                const total = rows.reduce((s,r)=>s+r.revenue,0);
+                const selectedCategory = rows.find(r=>r.name===selectedReportCategory);
+                if (!rows.length) return null;
+                return (
+                  <div style={{...card,padding:16,marginBottom:16}}>
+                    <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:12}}>¿De dónde vienen las ventas?</p>
+                    <div style={{display:"flex",flexDirection:"column" as const,gap:10}}>
+                      {rows.map((r,i)=>(
+                        <button key={r.name} onClick={()=>setSelectedReportCategory(selectedReportCategory===r.name?null:r.name)} style={{background:"transparent",textAlign:"left",padding:0}}>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                            <span style={{fontSize:13,fontWeight:700,color:DARK}}>{r.name}</span>
+                            <span style={{fontSize:13,fontWeight:900,color:i===0?RED:DARK}}>{r.qty} uds · {$(r.revenue)} <span style={{color:MUTED,fontWeight:700}}>({total?Math.round(r.revenue/total*100):0}%)</span></span>
+                          </div>
+                          <div style={{height:8,background:CREAM,borderRadius:4,overflow:"hidden"}}>
+                            <div style={{height:"100%",width:`${total?(r.revenue/total)*100:0}%`,background:i===0?RED:GOLD,borderRadius:4}}/>
+                          </div>
+                        </button>
+                      ))}
+                      {selectedCategory && <div style={{marginTop:4,paddingTop:12,borderTop:`1px solid ${BORDER}`}}>
+                        <p style={{fontSize:12,fontWeight:800,color:DARK,marginBottom:8}}>Productos de {selectedCategory.name}</p>
+                        {selectedCategory.products.map(p=>(
+                          <div key={p.name} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:`1px solid ${CREAM}`}}>
+                            <span style={{flex:1,fontSize:13,fontWeight:700,color:DARK}}>{p.name}</span>
+                            <span style={{fontSize:12,fontWeight:700,color:MUTED}}>{p.qty} uds</span>
+                            <span style={{fontSize:13,fontWeight:900,color:RED}}>{$(p.revenue)}</span>
+                            <span style={{fontSize:12,fontWeight:700,color:MUTED}}>{selectedCategory.revenue?Math.round(p.revenue/selectedCategory.revenue*100):0}%</span>
+                          </div>
+                        ))}
+                      </div>}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Top productos */}
+              <div style={{...card,padding:16}}>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Top productos</p>
+                {(adminStats?.topProducts||[]).length===0 ? (
+                  <p style={{fontSize:14,color:MUTED,fontWeight:600}}>Sin datos aún</p>
+                ) : (
+                  <div style={{display:"flex",flexDirection:"column" as const,gap:8}}>
+                    {(adminStats?.topProducts||[]).map((p,i)=>(
+                      <div key={p.name} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",background:i===0?`rgba(122,30,58,0.06)`:CREAM,borderRadius:10}}>
+                        <span style={{fontSize:13,fontWeight:900,color:MUTED,minWidth:20}}>{i+1}</span>
+                        <span style={{flex:1,fontSize:14,fontWeight:700,color:DARK}}>{p.name}</span>
+                        <span style={{fontSize:13,fontWeight:700,color:MUTED}}>{p.qty} uds</span>
+                        <span style={{fontSize:15,fontWeight:900,color:RED}}>{$(p.revenue)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               </div>
               </div>
             </div>
