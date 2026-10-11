@@ -17,7 +17,9 @@ export async function DELETE(req: Request) {
   // diferencia de "Anular", que sí lo deja registrado. Los pedidos ya
   // cobrados (pay_order / record_item_payment) habían descontado inventario
   // según receta; hay que devolverlo antes de borrar el detalle de items.
-  const { data: paidOrders } = await ctx.admin.from("orders").select("id").in("id", ids).eq("status", "pagado");
+  // Desde Fase 12 el cobro vive en payment_status (status es solo preparación).
+  // Un pedido anulado (cancelado) ya cobrado también había descontado stock.
+  const { data: paidOrders } = await ctx.admin.from("orders").select("id").in("id", ids).eq("payment_status", "paid");
   const paidIds = (paidOrders || []).map((o: { id: string }) => o.id);
 
   if (paidIds.length) {

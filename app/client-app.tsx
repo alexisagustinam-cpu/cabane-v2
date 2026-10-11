@@ -2,11 +2,20 @@
 
 import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import { createClient, type Session } from "@supabase/supabase-js";
+import { FONT, RED, DARK, CREAM, GOLD, GREEN, MUTED, BORDER, CARD, CREAM2, ORANGE, ALERT_RED, SLATE } from "./ui/tokens";
+import { Sheet } from "./ui/Sheet";
+import { Toaster, toast } from "./ui/Toaster";
+import { NavPills } from "./ui/NavPills";
+import { gsap, bump, attention, exitCard, haptic, prefersReducedMotion, useFlip } from "./ui/motion";
+import { isSafeMode, safeFetch, SAFE_MODE_EVENT } from "./ui/safe-mode";
+import { IconTrash, IconSound, IconReceipt, IconRefresh, IconBell, IconBack, IconSearch, IconInfo, IconChart, IconList, IconWallet, IconTag, IconNote, IconBox, IconFlame, IconUsers, IconSettings, IconDownload, IconCheck, IconPlus, IconMinus, IconLogout, IconClock, IconSun, IconShare, IconCup, IconGrid, IconMove, IconSplit, IconClose } from "./ui/icons";
 
 let _db: ReturnType<typeof createClient> | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function getDB(): any {
-  if (!_db) _db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+  // safeFetch simula las escrituras cuando la app corre en localhost/red local
+  // (modo prueba) para no tocar la base de datos real del restaurante.
+  if (!_db) _db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { global: { fetch: safeFetch } });
   return _db;
 }
 
@@ -18,6 +27,14 @@ function expiredSessionResponse(): Response {
 // una acción administrativa, refresca un token próximo a vencer y reintenta
 // una sola vez si el servidor lo rechaza con 401.
 async function adminFetch(input: string, init: RequestInit): Promise<Response> {
+  // Las rutas /api/admin usan la service_role key contra la base real: en
+  // modo prueba no se llaman.
+  if (isSafeMode()) {
+    window.dispatchEvent(new CustomEvent(SAFE_MODE_EVENT, { detail: input }));
+    let ids: unknown[] = [];
+    try { ids = JSON.parse(String(init.body||"{}")).ids || []; } catch { /* cuerpo sin ids */ }
+    return Response.json({ ok: true, deleted: ids.length, safeMode: true });
+  }
   const db = getDB();
   let { data: { session } } = await db.auth.getSession();
   if (!session || (session.expires_at && session.expires_at * 1000 <= Date.now() + 60000)) {
@@ -153,9 +170,6 @@ function screensForRoles(roles: Role[]): string[] {
   return ROLE_ORDER.filter(r => roles.includes(r));
 }
 
-const FONT = "'Nunito', sans-serif";
-const RED = "#7A1E3A", DARK = "#2A1A1F", CREAM = "#EDE0CE", GOLD = "#B5894A", GREEN = "#2F7D32", MUTED = "#7A6555", BORDER = "#C4A882", CARD = "#F7F0E6", CREAM2 = "#D4BFA0";
-const ORANGE = "#E8720C", ALERT_RED = "#C62828";
 
 // Nomenclatura de tiempos de cocina: verde 0-10 min, naranja 10-15, rojo +15 (parpadea a los 20)
 const kitchenTimeColor = (mins: number) => mins < 10 ? GREEN : mins < 15 ? ORANGE : ALERT_RED;
@@ -186,7 +200,7 @@ input,select,textarea{min-width:0;max-width:100%;box-sizing:border-box}
 .product-row-notes{grid-column:1/-1;min-width:0;border-top:1px solid ${BORDER};padding-top:10px}
 @media(min-width:900px){.product-row-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px!important}.product-row{min-height:88px!important}}
 @media(min-width:1400px){.product-row-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:480px){.product-row{grid-template-columns:1fr}.product-row-control{justify-self:start}.product-row-main p{white-space:normal!important}}
+@media(max-width:480px){.product-row{gap:8px 10px;padding:12px!important}.product-row-main p{white-space:normal!important}}
 @media(hover:hover){.mesa-card:hover{box-shadow:0 8px 20px rgba(42,26,31,0.12)!important}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 
@@ -220,7 +234,6 @@ export default function App() {
   const [cat, setCat] = useState("");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState(false);
-  const [sentMsg, setSentMsg] = useState("");
   const [sending, setSending] = useState(false);
   const [kOrders, setKOrders] = useState<Order[]>([]);
   const [kLoading, setKLoading] = useState(false);
@@ -331,6 +344,15 @@ export default function App() {
   const [closureMsg, setClosureMsg] = useState("");
   const [dayClosure, setDayClosure] = useState<{expected_cash:number;counted_cash:number;difference:number;closer_name?:string;notes?:string}|null>(null);
   const styleRef = useRef(false);
+  const [safeMode, setSafeMode] = useState(false);
+  // Pedido de cobro pendiente de confirmar (cobro en dos pasos: método → confirmar).
+  const [chargeIntent, setChargeIntent] = useState<{target:string; method:"efectivo"|"tarjeta"|"transferencia"}|null>(null);
+  const [wakeLockOn, setWakeLockOn] = useState(false);
+  const screenRef = useRef<HTMLDivElement>(null);
+  const cartTotalRef = useRef<HTMLParagraphElement>(null);
+  const kitchenListRef = useRef<HTMLDivElement>(null);
+  const flipKitchen = useFlip(kitchenListRef);
+  const mesaStatesRef = useRef<Record<string,string>>({});
 
   useEffect(() => {
     if (!styleRef.current) {
@@ -340,6 +362,9 @@ export default function App() {
       styleRef.current = true;
     }
     setOk(true);
+    setSafeMode(isSafeMode());
+    const onSafeWrite = () => toast("Modo prueba: se simuló, no se guardó en la base real", "safe");
+    window.addEventListener(SAFE_MODE_EVENT, onSafeWrite);
     // Desbloquear audio con el primer toque (el beep de cocina lo necesita)
     const unlock = () => unlockAudio();
     document.addEventListener("pointerdown", unlock);
@@ -364,7 +389,7 @@ export default function App() {
       if (s) loadProfile(s.user.id);
       else { setProfile(null); setAuthLoading(false); }
     });
-    return () => { subscription.unsubscribe(); document.removeEventListener("pointerdown", unlock); };
+    return () => { subscription.unsubscribe(); document.removeEventListener("pointerdown", unlock); window.removeEventListener(SAFE_MODE_EVENT, onSafeWrite); };
   }, []);
 
   // Indicador de conexión — en un restaurante el Wi-Fi se cae y nadie se entera
@@ -626,10 +651,11 @@ export default function App() {
     setKLoading(true);
     const todayStart = new Date(); todayStart.setHours(0,0,0,0);
     const [{ data: orders }, { data: summaryItems }] = await Promise.all([
-      getDB().from("orders").select("*, order_items!inner(*)").eq("order_items.station",station).in("order_items.item_status",["enviado","preparando"]).in("status",["enviado","preparando"]).order("created_at",{ascending:false}),
+      getDB().from("orders").select("*, order_items!inner(*)").eq("order_items.station",station).in("order_items.item_status",["enviado","preparando"]).in("status",["enviado","preparando"]).order("created_at",{ascending:true}),
       getDB().from("order_items").select("product_name,quantity,orders!inner(created_at,status)")
         .eq("station",station).neq("orders.status","cancelado").gte("orders.created_at",todayStart.toISOString()),
     ]);
+    flipKitchen(); // las tarjetas se reacomodan con animación y las nuevas entran con destello
     setKOrders(orders||[]);
     const sMap: Record<string,number> = {};
     (summaryItems||[]).forEach((i:{product_name:string;quantity:number}) => {
@@ -637,7 +663,7 @@ export default function App() {
     });
     setKSummary(Object.entries(sMap).map(([name,qty])=>({name,qty})).sort((a,b)=>b.qty-a.qty).slice(0,6));
     setKLoading(false);
-  }, []);
+  }, [flipKitchen]);
 
   async function ensurePaymentSchema(): Promise<boolean> {
     const { error } = await getDB().from("orders").select("payment_status").limit(1);
@@ -728,6 +754,85 @@ export default function App() {
     return () => { getDB().removeChannel(ch); };
   }, [screen, loadKitchen]);
 
+  // Al volver a la app (teléfono desbloqueado, cambio de pestaña, Wi-Fi que
+  // regresa) la conexión en vivo pudo haberse caído: se recargan los datos
+  // de la pantalla actual para no mostrar mesas o pedidos viejos.
+  useEffect(() => {
+    if (!profile) return;
+    let last = Date.now();
+    const refresh = () => {
+      if (document.visibilityState!=="visible" || Date.now()-last < 3000) return;
+      last = Date.now();
+      if (screen==="waiter") loadWaiterOrders();
+      else if (screen==="kitchen" || screen==="bar") loadKitchen(screen==="bar"?"bar":"kitchen");
+      else if (screen==="cashier") loadCashier();
+    };
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("online", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("online", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [profile, screen, loadWaiterOrders, loadKitchen, loadCashier]);
+
+  // Cocina y barra: la tablet no se apaga sola mientras la pantalla está
+  // abierta — si se apaga, no suena ni se ven los pedidos nuevos.
+  useEffect(() => {
+    if (screen!=="kitchen" && screen!=="bar") return;
+    type WakeLock = { release: () => Promise<void>; addEventListener: (t:string, f:()=>void)=>void };
+    const nav = navigator as Navigator & { wakeLock?: { request: (t:"screen")=>Promise<WakeLock> } };
+    if (!nav.wakeLock) return;
+    let lock: WakeLock | null = null;
+    let cancelled = false;
+    const request = async () => {
+      if (document.visibilityState!=="visible") return;
+      try {
+        lock = await nav.wakeLock!.request("screen");
+        if (cancelled) { lock.release(); return; }
+        setWakeLockOn(true);
+        lock.addEventListener("release", () => setWakeLockOn(false));
+      } catch { setWakeLockOn(false); }
+    };
+    request();
+    document.addEventListener("visibilitychange", request);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", request);
+      lock?.release().catch(()=>{});
+      setWakeLockOn(false);
+    };
+  }, [screen]);
+
+  // Transición corta al cambiar de pantalla o sección.
+  useEffect(() => {
+    const el = screenRef.current;
+    if (!el || prefersReducedMotion()) return;
+    gsap.fromTo(el, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.28, ease: "power2.out", clearProps: "transform,opacity" });
+  }, [screen, waiterView, adminSection]);
+
+  // Pulso en la mesa que cambió de estado (pedido listo, cobrado, liberado…)
+  // por una acción de otra persona — así se nota en el mapa sin buscarla.
+  useEffect(() => {
+    const prev = mesaStatesRef.current;
+    const next: Record<string,string> = {};
+    document.querySelectorAll<HTMLElement>("[data-mesa-key]").forEach(el => {
+      const key = el.dataset.mesaKey!, state = el.dataset.mesaState!;
+      next[key] = state;
+      if (prev[key] && prev[key]!==state) attention(el, state==="libre" ? "122,101,85" : state.startsWith("listo") ? "47,125,50" : "181,137,74");
+    });
+    mesaStatesRef.current = next;
+  });
+
+  // El total del carrito "salta" cada vez que cambia la cantidad.
+  const prevCartCount = useRef(0);
+  useEffect(() => {
+    const count = Object.values(cart).reduce((s,i)=>s+i.qty,0);
+    if (count!==prevCartCount.current) bump(cartTotalRef.current);
+    prevCartCount.current = count;
+  }, [cart]);
+
   // Timer para tiempo transcurrido en cocina
   useEffect(() => {
     const id = setInterval(()=>setTick((t:number)=>t+1), 60000);
@@ -776,14 +881,14 @@ export default function App() {
     const prevStart = new Date(new Date(start).getTime()-spanMs).toISOString();
 
     const [{ data: periodOrders }, { data: items }, { data: exRows }, { data: fxRows }, { data: wRows }, { data: prevOrders }, { data: prodCats }] = await Promise.all([
-      getDB().from("orders").select("id,total,created_at").eq("payment_status","paid").gte("created_at",start).lt("created_at",end),
+      getDB().from("orders").select("id,total,created_at").eq("payment_status","paid").neq("status","cancelado").gte("created_at",start).lt("created_at",end),
       getDB().from("order_items").select("product_id,product_name,quantity,unit_price,orders!inner(payment_status,created_at)")
-        .eq("orders.payment_status","paid").gte("orders.created_at",start).lt("orders.created_at",end),
+        .eq("orders.payment_status","paid").neq("orders.status","cancelado").gte("orders.created_at",start).lt("orders.created_at",end),
       // Si las tablas de fase 3/4 no existen aún, estas queries devuelven null y se ignoran
       getDB().from("expenses").select("amount,category").gte("expense_date",start.slice(0,10)).lt("expense_date",end.slice(0,10)),
       getDB().from("fixed_expenses").select("amount").eq("active",true),
       getDB().from("waste").select("quantity,unit_price,reason").gte("created_at",start).lt("created_at",end),
-      getDB().from("orders").select("total").eq("payment_status","paid").gte("created_at",prevStart).lt("created_at",start),
+      getDB().from("orders").select("total").eq("payment_status","paid").neq("status","cancelado").gte("created_at",prevStart).lt("created_at",start),
       getDB().from("products").select("id,category"),
     ]);
 
@@ -1093,22 +1198,24 @@ export default function App() {
   }
 
   // Anular un pedido ya cobrado (ej. pruebas cobradas por error) — deja
-  // de contar en caja y reportes porque esos solo suman status "pagado".
+  // de contar en caja y reportes: esos excluyen los pedidos cancelados.
   function annulOrder(id: string) {
     askConfirm("¿Anular este pedido? Dejará de contar en la caja y los reportes.", async () => {
       // Si ya tiene cobros parciales por persona sin cubrir el pedido entero,
       // anularlo dejaría ese dinero ya cobrado fuera de todo reporte (los
-      // reportes solo suman pagos de pedidos en estado "pagado"). Hay que
+      // reportes solo suman pedidos con payment_status "paid"). Hay que
       // terminar de cobrarlo (o eliminarlo definitivamente) antes de anular.
-      const { data: order } = await getDB().from("orders").select("status").eq("id",id).single();
-      if (order && order.status !== "pagado") {
+      const { data: order } = await getDB().from("orders").select("payment_status").eq("id",id).single();
+      if (order && order.payment_status !== "paid") {
         const { count } = await getDB().from("payments").select("id",{count:"exact",head:true}).eq("order_id",id);
         if ((count||0) > 0) {
-          setHistMsg("Error: este pedido tiene cobros parciales por persona sin terminar de cubrir. Completá el cobro o eliminalo definitivamente antes de anularlo — anularlo ahora dejaría ese dinero fuera de los reportes.");
+          setHistMsg("Error: este pedido tiene cobros parciales por persona sin terminar de cubrir. Completa el cobro o elimínalo definitivamente antes de anularlo — anularlo ahora dejaría ese dinero fuera de los reportes.");
           return;
         }
       }
-      await getDB().from("orders").update({status:"cancelado"}).eq("id",id);
+      const { error } = await getDB().from("orders").update({status:"cancelado"}).eq("id",id);
+      if (error) { setHistMsg(`Error: ${error.message}`); return; }
+      toast("Pedido anulado — ya no cuenta en caja ni reportes");
       loadHistory();
     });
   }
@@ -1221,7 +1328,7 @@ export default function App() {
   async function ensurePreparationSchema(): Promise<boolean> {
     const { error } = await getDB().from("order_items").select("station,item_status").limit(1);
     if (!error) return true;
-    setSentMsg("Se requiere la migración Fase 11 (Barra y Cocina) antes de enviar pedidos.");
+    toast("Se requiere la migración Fase 11 (Barra y Cocina) antes de enviar pedidos.", "error");
     return false;
   }
 
@@ -1261,7 +1368,7 @@ export default function App() {
       if (error && /customer_name/.test(error.message||"")) {
         ({ data: order, error } = await getDB().from("orders").insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null}).select("*, order_items(*)").single());
       }
-      if (error||!order) { setSentMsg("Error al enviar. Revisa tu conexión e intenta de nuevo."); pendingOrderRef.current = null; setSending(false); return; }
+      if (error||!order) { toast("Error al enviar. Revisa tu conexión e intenta de nuevo.", "error"); pendingOrderRef.current = null; setSending(false); return; }
       // Si el pedido ya traía items (recuperado de un intento anterior), no los dupliques
       if (!order.order_items?.length) {
         const { error: itemsError } = await getDB().from("order_items").insert(items.map((i:CartItem)=>({
@@ -1270,21 +1377,21 @@ export default function App() {
           station:stationForCategory(i.category), item_status:"enviado",
           notes:[...i.notes, i.customNote].filter(Boolean).join(", ")||null
         })));
-        if (itemsError) { setSentMsg("Pedido creado pero hubo un error con los items. Avisa al admin."); setSending(false); return; }
+        if (itemsError) { toast("Pedido creado pero hubo un error con los items. Avisa al admin.", "error"); setSending(false); return; }
       }
       pendingOrderRef.current = null;
       // El nombre NO se limpia — sigue siendo la misma mesa/cliente, así que
       // si el mesero manda otra ronda enseguida ya lo tiene puesto. Se
       // actualiza solo cuando realmente cambia de mesa (ver useEffect de mesa).
       setCart({}); setModal(false); setTableNote("");
-      setSentMsg(`Pedido #${order.order_number} confirmado — cocina ya lo recibió`);
-      setTimeout(()=>setSentMsg(""),5000);
+      haptic(20);
+      toast(`Pedido ${order.order_number?`#${order.order_number} `:""}enviado — ${mesa}${customerName.trim()?` · ${customerName.trim()}`:""}`);
       setWaiterView("map");
       loadWaiterOrders();
     } catch(_) {
       // Puede haber llegado al servidor igual — se conserva la clave para
       // que un reintento no cree un pedido duplicado.
-      setSentMsg("Sin conexión. Verifica internet e intenta de nuevo.");
+      toast("Sin conexión. Verifica internet e intenta de nuevo.", "error");
     }
     setSending(false);
   }
@@ -1298,14 +1405,21 @@ export default function App() {
 
   async function stationOrderUpdate(orderId: string, station: Station, status: OrderItem["item_status"]) {
     setUpdating(orderId);
+    haptic(12);
     // Una estación trabaja por pedido: el estado se aplica a todas sus líneas.
     // El trigger de Fase 11 sigue calculando el estado agregado de la cabecera.
     const { error } = await getDB().from("order_items").update({item_status:status}).eq("order_id",orderId).eq("station",station);
     if (error) {
-      setWasteMsg(`Error al actualizar pedido: ${error.message}. Se requiere la migración Fase 11.`);
+      toast(`Error al actualizar pedido: ${error.message}. Se requiere la migración Fase 11.`, "error");
       setUpdating(null);
       return;
     }
+    // Un pedido terminado sale de la lista con animación y el resto se reacomoda.
+    if (status==="listo") {
+      await exitCard(kitchenListRef.current?.querySelector(`[data-flip-id="${orderId}"]`) ?? null);
+      toast("Pedido listo para entregar");
+    }
+    flipKitchen();
     setKOrders(prev=>prev.map(o=>o.id!==orderId ? o : ({...o,order_items:(o.order_items||[])
       .map(i=>i.station===station?{...i,item_status:status}:i)}))
       .filter(o=>(o.order_items||[]).some(i=>i.station===station && i.item_status!=="listo")));
@@ -1403,9 +1517,13 @@ export default function App() {
     }
     if (err) {
       setPayError(err);
+      toast(err, "error");
       setTimeout(()=>setPayError(""), 6000);
       loadCashier();
     } else {
+      haptic(20);
+      const methodName: Record<string,string> = { efectivo:"efectivo", tarjeta:"tarjeta", transferencia:"transferencia" };
+      toast(`Cobrado ${$(parts.reduce((s,p)=>s+p.amount,0))} · ${parts.map(p=>methodName[p.method]||p.method).join(" + ")}`);
       setCOrders((prev:Order[])=>prev.map(o=>o.id===orderId?{...o,payment_status:"paid"}:o));
       setCPayBreakdown((prev:{efectivo:number;tarjeta:number;transferencia:number})=>{
         const next = {...prev};
@@ -1460,7 +1578,7 @@ export default function App() {
     const allocations = Object.entries(itemPayAlloc)
       .map(([order_item_id, qty])=>({order_item_id, quantity: parseFloat(qty)||0}))
       .filter(a=>a.quantity>0);
-    if (!allocations.length) { setItemPayError("Seleccioná al menos un producto"); return; }
+    if (!allocations.length) { setItemPayError("Selecciona al menos un producto"); return; }
     for (const a of allocations) {
       const p = itemPayPending[a.order_item_id];
       if (!p || a.quantity > p.pending + 0.0001) {
@@ -1542,8 +1660,10 @@ export default function App() {
     }
     if (err) {
       setPayError(`No se pudo mover el pedido: ${err}`);
+      toast(`No se pudo mover el pedido: ${err}`, "error");
       setTimeout(()=>setPayError(""), 6000);
     } else {
+      toast(`Pedido #${order.order_number} movido a ${target}`);
       const upd = (list:Order[]) => list.map(o=>o.id===order.id?{...o,table_label:target}:o);
       setCOrders(upd); setWOrders(upd); setKOrders(upd);
     }
@@ -1551,14 +1671,30 @@ export default function App() {
 
   async function releaseTable(tableLabel: string) {
     if (!tableReleaseSchemaReady) {
-      setSentMsg("Para liberar mesas falta aplicar Fase 13 en Supabase.");
+      toast("Para liberar mesas falta aplicar Fase 13 en Supabase.", "error");
       return;
     }
     const releasedAt = new Date().toISOString();
-    const { error } = await getDB().from("orders").update({table_released_at:releasedAt})
-      .eq("table_label",tableLabel).is("table_released_at",null).eq("payment_status","paid").eq("status","listo");
-    if (error) {
-      setSentMsg(`No se pudo liberar ${tableLabel}: ${error.message}`);
+    // Fase 16: RPC release_table deja liberar a mesero, caja y admin. Sin
+    // ella, el update directo solo lo permite RLS a caja/admin — y un update
+    // bloqueado por RLS no da error, solo no cambia filas. Por eso se pide
+    // la fila de vuelta y se avisa si no se liberó nada.
+    const { data: rpcData, error: rpcError } = await getDB().rpc("release_table", { p_table: tableLabel });
+    let released = 0;
+    if (!rpcError) {
+      if (rpcData && rpcData.ok === false) { toast(rpcData.error || `No se pudo liberar ${tableLabel}`, "error"); return; }
+      released = rpcData?.released ?? 1;
+    } else if (rpcError.code === "PGRST202" || /release_table/.test(rpcError.message||"")) {
+      const { data, error } = await getDB().from("orders").update({table_released_at:releasedAt})
+        .eq("table_label",tableLabel).is("table_released_at",null).eq("payment_status","paid").eq("status","listo").select("id");
+      if (error) { toast(`No se pudo liberar ${tableLabel}: ${error.message}`, "error"); return; }
+      released = (data||[]).length;
+    } else {
+      toast(`No se pudo liberar ${tableLabel}: ${rpcError.message}`, "error");
+      return;
+    }
+    if (!released) {
+      toast(`${tableLabel} no se liberó: tu usuario no tiene permiso. Pídeselo a caja.`, "error");
       return;
     }
     const markReleased = (list:Order[]) => list.map(o=>o.table_label===tableLabel && o.payment_status==="paid" && o.status==="listo"
@@ -1568,8 +1704,7 @@ export default function App() {
     setKOrders(markReleased);
     setPayModalMesa(null);
     setCashierMesa(null);
-    setSentMsg(`${tableLabel} quedó libre para atender un nuevo cliente.`);
-    setTimeout(()=>setSentMsg(""),5000);
+    toast(`${tableLabel} quedó libre para un nuevo cliente`);
   }
 
   // Mapa de mesas (compartido entre mesero y caja) — declarada antes del
@@ -1597,6 +1732,19 @@ export default function App() {
   });
   const screens = profile ? screensForRoles(profile.roles) : [];
 
+  function openAdminSection(k: typeof adminSection) {
+    setAdminSection(k);
+    if (k==="stats") loadAdminStats();
+    else if (k==="history") loadHistory();
+    else if (k==="expenses") loadExpenses();
+    else if (k==="products") loadAdminProducts();
+    else if (k==="notes") loadNotes();
+    else if (k==="inventory") loadInventory();
+    else if (k==="waste") loadWaste();
+    else if (k==="users") loadUsers();
+    else if (k==="config") { loadConfig(); loadAdminProducts(); }
+  }
+
   // ── Shared component styles ─────────────────────────────────────
   const card = { background:CARD, borderRadius:16, boxShadow:`0 1px 0 ${BORDER}, 0 4px 20px rgba(23,18,15,0.06)`, border:`1px solid ${BORDER}` };
   
@@ -1621,12 +1769,13 @@ export default function App() {
     [...catList, ...[...new Set(prods.map(p=>p.category))].filter(c=>!catList.includes(c))];
 
   // Selector de período compartido por Reportes/Pedidos/Gastos/Mermas
-  const periodInputSt = { height:38, padding:"0 12px", borderRadius:10, border:`1.5px solid ${BORDER}`, fontSize:13, fontWeight:600, fontFamily:FONT, color:DARK, background:CARD, outline:"none" };
+  const periodInputSt = { height:44, padding:"0 12px", borderRadius:10, border:`1.5px solid ${BORDER}`, fontSize:13, fontWeight:600, fontFamily:FONT, color:DARK, background:CARD, outline:"none" };
   const renderPeriodPicker = (onApply: ()=>void, extra?: ReactNode) => (
     <div style={{display:"flex",flexWrap:"wrap" as const,gap:8,marginBottom:16,alignItems:"center"}}>
-      {([["day","Día"],["week","Semana"],["month","Mes"],["custom","Rango"]] as const).map(([m,l])=>(
-        <button key={m} onClick={()=>setAdminMode(m)} style={{...btn(adminMode===m?RED:CREAM2,adminMode===m?"#fff":DARK),height:38,padding:"0 14px",fontSize:13}}>{l}</button>
-      ))}
+      <div style={{flex:"1 1 100%",maxWidth:420}}>
+        <NavPills size="sm" stretch ariaLabel="Período" active={adminMode} onChange={m=>{haptic();setAdminMode(m);}}
+          items={[{key:"day",label:"Día"},{key:"week",label:"Semana"},{key:"month",label:"Mes"},{key:"custom",label:"Rango"}]}/>
+      </div>
       {(adminMode==="day"||adminMode==="week") && (
         <input type="date" value={adminDate} onChange={e=>setAdminDate(e.target.value)} style={periodInputSt}/>
       )}
@@ -1640,7 +1789,7 @@ export default function App() {
           <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)} style={periodInputSt}/>
         </>
       )}
-      <button onClick={onApply} style={{...btn(DARK,"#fff"),height:38,padding:"0 16px",fontSize:13}}>Aplicar</button>
+      <button onClick={()=>{haptic();onApply();}} style={{...btn(DARK,"#fff"),height:44,padding:"0 18px",fontSize:14}}>Aplicar</button>
       {(adminMode==="week"||adminMode==="custom") && (
         <span style={{fontSize:12,fontWeight:800,color:MUTED,background:CREAM2,borderRadius:99,padding:"6px 12px"}}>{periodLabel()}</span>
       )}
@@ -1648,7 +1797,17 @@ export default function App() {
     </div>
   );
 
-  const renderMesaMap = (orders: Order[], onPick:(m:string)=>void, selected?: string|null) => (
+  const mapLegend = (
+    <div style={{display:"flex",gap:"6px 14px",flexWrap:"wrap" as const,marginBottom:12}}>
+      {[{c:"#C9B99F",l:"Libre"},{c:GOLD,l:"En preparación"},{c:GREEN,l:"Listo para entregar"},{c:SLATE,l:"Pagada · ocupada"}].map(({c,l})=>(
+        <span key={l} style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:MUTED}}>
+          <span style={{width:10,height:10,borderRadius:"50%",background:c}}/>{l}
+        </span>
+      ))}
+    </div>
+  );
+
+  const renderMesaMap = (orders: Order[], onPick:(m:string)=>void, selected?: string|null, ctx="w") => (
     <div className="mesa-grid">
       {mesasList.map(m=>{
         const mo = mesaOrdersOf(orders, m);
@@ -1659,17 +1818,23 @@ export default function App() {
         const allListo = !libre && mo.every(o=>o.status==="listo");
         const total = mo.reduce((s,o)=>s+o.total,0);
         const isSel = selected===m;
-        const stateColor = libre ? "#C9B99F" : allPaid ? GREEN : allListo ? GREEN : GOLD;
-        const stateText  = libre ? "#A08D75" : allPaid ? GREEN : allListo ? GREEN : "#8A6210";
+        // Pagada y ya servida = azul pizarra (clientes sentados, nada pendiente);
+        // verde queda solo para "listo para entregar", que pide acción.
+        const paidSeated = isPhysicalTable && allPaid && allListo;
+        const stateColor = libre ? "#C9B99F" : paidSeated ? SLATE : allListo ? GREEN : GOLD;
+        const stateText  = libre ? "#A08D75" : paidSeated ? SLATE : allListo ? GREEN : "#8A6210";
+        // Etiquetas cortas para que quepan en tarjetas de teléfono; la leyenda
+        // del mapa explica cada color ("Pagada · ocupada", "Listo para entregar"…).
         const stateLabel = libre ? "Libre"
-          : isPhysicalTable && allPaid && allListo ? "Pagada · ocupada"
-          : allPaid ? "Pagada · en preparación"
-          : allListo ? "Listo para entregar"
-          : "En preparación";
+          : paidSeated ? "Pagada"
+          : allPaid ? "Pagada · prep."
+          : allListo ? "Listo"
+          : "Preparando";
         const oldest = mo.length ? mo.reduce((a,b)=>new Date(a.created_at)<new Date(b.created_at)?a:b) : null;
         void tick; // el tiempo de espera se refresca cada minuto
         return (
-          <button key={m} onClick={()=>onPick(m)} className="mesa-card" style={{
+          <button key={m} onClick={()=>{ haptic(); onPick(m); }} className="mesa-card"
+            data-mesa-key={`${ctx}:${m}`} data-mesa-state={libre?"libre":paidSeated?"pagada":allListo?"listo":allPaid?"pagada-prep":"prep"} style={{
             position:"relative" as const, textAlign:"left" as const, fontFamily:FONT, cursor:"pointer",
             background: libre ? "#FBF6ED" : "#fff",
             border:`2px solid ${isSel ? RED : libre ? "#E4D7C3" : stateColor}`,
@@ -1684,7 +1849,7 @@ export default function App() {
               {isLlevar || isDelivery ? (
                 <span style={{fontSize:26,lineHeight:1}}>{isLlevar?"🥡":"🛵"}</span>
               ) : (
-                <svg width="30" height="30" viewBox="0 0 40 40" aria-hidden="true">
+                <svg width="30" height="30" viewBox="0 0 40 40" aria-hidden="true" style={{flexShrink:0}}>
                   <circle cx="20" cy="6"  r="4.5" fill={stateColor} opacity="0.4"/>
                   <circle cx="20" cy="34" r="4.5" fill={stateColor} opacity="0.4"/>
                   <circle cx="6"  cy="20" r="4.5" fill={stateColor} opacity="0.4"/>
@@ -1692,10 +1857,10 @@ export default function App() {
                   <circle cx="20" cy="20" r="10.5" fill={stateColor}/>
                 </svg>
               )}
-              <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:10,fontWeight:800,textTransform:"uppercase" as const,letterSpacing:"0.05em",
-                color:stateText,background:libre?"rgba(160,141,117,0.12)":`${stateColor}1C`,borderRadius:99,padding:"4px 9px",whiteSpace:"nowrap" as const}}>
+              <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,fontWeight:800,textTransform:"uppercase" as const,letterSpacing:"0.04em",
+                color:stateText,background:libre?"rgba(160,141,117,0.12)":`${stateColor}1C`,borderRadius:99,padding:"4px 9px",whiteSpace:"nowrap" as const,minWidth:0,overflow:"hidden",textOverflow:"ellipsis"}}>
                 <span style={{width:7,height:7,borderRadius:"50%",background:stateColor,flexShrink:0,
-                  animation:allListo?"pulse 1.2s ease infinite":undefined}}/>
+                  animation:allListo&&!paidSeated?"pulse 1.2s ease infinite":undefined}}/>
                 {stateLabel}
               </span>
             </div>
@@ -1736,7 +1901,7 @@ export default function App() {
 
   const offlineBanner = !online ? (
     <div style={{position:"fixed" as const,top:0,left:0,right:0,zIndex:500,background:ALERT_RED,color:"#fff",textAlign:"center" as const,padding:"8px 16px",fontSize:13,fontWeight:800}}>
-      ⚠️ Sin conexión a internet — los cambios no se guardarán hasta reconectar
+      Sin conexión a internet — los cambios no se guardarán hasta reconectar
     </div>
   ) : null;
 
@@ -1813,65 +1978,71 @@ export default function App() {
   );
 
   // ── APP SHELL ───────────────────────────────────────────────────
+  const SCREEN_ICONS: Record<string, ReactNode> = { waiter:<IconGrid size={17}/>, kitchen:<IconFlame size={17}/>, bar:<IconCup size={17}/>, cashier:<IconWallet size={17}/>, admin:<IconChart size={17}/> };
   return (
-    <div style={{minHeight:"100vh",background:CREAM,display:"flex",flexDirection:"column",fontFamily:FONT}}>
+    <div style={{minHeight:"100dvh",background:CREAM,display:"flex",flexDirection:"column",fontFamily:FONT}}>
       {offlineBanner}
+      <Toaster/>
+      {safeMode && (
+        <div className="cb-safe-strip">MODO PRUEBA · local — puedes tocar todo, nada se guarda en la base real</div>
+      )}
 
       {/* Top bar */}
-      <header style={{background:DARK,padding:"0 16px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:100,boxShadow:`0 2px 12px rgba(23,18,15,0.3)`}}>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
+      <header style={{background:DARK,padding:"0 12px 0 16px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,position:"sticky",top:0,zIndex:100,boxShadow:`0 2px 12px rgba(23,18,15,0.3)`}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}>
           <img src="/logo.jpg" alt="Cabane" onError={(e)=>{(e.currentTarget as HTMLImageElement).style.display="none"}}
-            style={{width:34,height:34,borderRadius:8,objectFit:"contain" as const,background:DARK}}/>
-          <span style={{fontWeight:900,fontSize:16,color:"#fff",letterSpacing:"-0.01em"}}><span style={{color:"#E8D5B7"}}>CABANE</span> <span style={{color:"rgba(255,255,255,0.5)",fontWeight:600,fontSize:13}}>Sandwiches</span></span>
+            style={{width:34,height:34,borderRadius:9,objectFit:"contain" as const,background:DARK,flexShrink:0}}/>
+          <span style={{fontWeight:900,fontSize:16,color:"#fff",letterSpacing:"-0.01em",whiteSpace:"nowrap" as const}}><span style={{color:"#E8D5B7"}}>CABANE</span> <span className="hide-xs" style={{color:"rgba(255,255,255,0.5)",fontWeight:600,fontSize:13}}>Sandwiches</span></span>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <div style={{textAlign:"right" as const}}>
-            <div style={{fontSize:13,fontWeight:800,color:"#fff"}}>{profile.name}</div>
-            <div style={{fontSize:11,fontWeight:600,color:"rgba(255,255,255,0.4)",textTransform:"uppercase" as const,letterSpacing:"0.06em"}}>{profile.roles.map(r=>SL[r]||r).join(" · ")}</div>
+        <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}>
+          <div style={{textAlign:"right" as const,minWidth:0}}>
+            <div style={{fontSize:13,fontWeight:800,color:"#fff",whiteSpace:"nowrap" as const,overflow:"hidden",textOverflow:"ellipsis",maxWidth:160}}>{profile.name}</div>
+            <div className="hide-sm" style={{fontSize:11,fontWeight:600,color:"rgba(255,255,255,0.4)",textTransform:"uppercase" as const,letterSpacing:"0.06em"}}>{profile.roles.map(r=>SL[r]||r).join(" · ")}</div>
           </div>
-          <button onClick={logout} style={{background:"rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.7)",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:700,border:"1px solid rgba(255,255,255,0.12)",cursor:"pointer",fontFamily:FONT}}>
-            Salir
+          <span aria-hidden="true" style={{width:34,height:34,borderRadius:"50%",background:`linear-gradient(135deg, ${RED}, #4A1022)`,color:"#F3E6D3",display:"inline-flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:14,flexShrink:0}}>
+            {(profile.name||"?").trim().charAt(0).toUpperCase()}
+          </span>
+          <button onClick={()=>askConfirm("¿Cerrar sesión en este dispositivo?", logout)} aria-label="Salir" title="Salir"
+            style={{background:"rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.75)",borderRadius:10,width:40,height:40,display:"inline-flex",alignItems:"center",justifyContent:"center",border:"1px solid rgba(255,255,255,0.12)",cursor:"pointer",flexShrink:0}}>
+            <IconLogout size={18}/>
           </button>
         </div>
       </header>
 
-      {/* Tabs */}
+      {/* Pantallas por rol — una sola línea, se desliza si no entra */}
       {screens.length>1 && (
-        <nav style={{background:DARK,padding:"0 12px 10px",display:"flex",gap:6}}>
-          {screens.map(s=>(
-            <button key={s} onClick={()=>goTo(s)} style={{flex:1,padding:"9px",borderRadius:10,fontWeight:700,fontSize:13,border:"none",cursor:"pointer",fontFamily:FONT,
-              background:screen===s?RED:"rgba(255,255,255,0.07)",color:screen===s?"#fff":"rgba(255,255,255,0.5)"}}>
-              {SL[s]}
-            </button>
-          ))}
+        <nav style={{background:DARK,padding:"2px 10px 10px"}}>
+          <NavPills tone="dark" stretch ariaLabel="Pantallas" active={screen}
+            onChange={s=>{ haptic(); goTo(s); }}
+            items={screens.map(s=>({key:s,label:SL[s],icon:SCREEN_ICONS[s]}))}/>
         </nav>
       )}
+
+      <div ref={screenRef} style={{flex:1,display:"flex",flexDirection:"column"}}>
 
       {/* ── MESERO · MAPA DE MESAS ─────────────────────────────── */}
       {screen==="waiter" && waiterView==="map" && (
         <div style={{flex:1,padding:16,maxWidth:1200,margin:"0 auto",width:"100%"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap" as const,gap:10}}>
             <div>
-              <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:2}}>Módulo</p>
-              <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK}}>Mesas</h1>
+              <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK,lineHeight:1.1}}>Mesas</h1>
+              <p style={{fontSize:13,fontWeight:700,color:MUTED,marginTop:2}}>
+                {(()=>{ const busy = mesasList.filter(m=>mesaOrdersOf(wOrders,m).length).length; return `${busy} ocupada${busy===1?"":"s"} · ${mesasList.length-busy} libre${mesasList.length-busy===1?"":"s"}`; })()}
+              </p>
             </div>
-            <button onClick={loadWaiterOrders} style={{...btn(CREAM2,DARK),height:44,padding:"0 18px",fontSize:14}}>↻ Actualizar</button>
+            <button onClick={()=>{haptic();loadWaiterOrders();toast("Mesas actualizadas","info");}} aria-label="Actualizar mesas" style={{...btn(CREAM2,DARK),height:44,padding:"0 14px",fontSize:14,gap:6}}><IconRefresh size={17}/><span className="hide-xs">Actualizar</span></button>
           </div>
 
-          {sentMsg && (
-            <div style={{marginBottom:14,background:"rgba(47,125,50,0.1)",border:`1.5px solid ${GREEN}`,borderRadius:12,padding:"12px 16px",fontSize:14,fontWeight:700,color:GREEN}}>
-              {sentMsg}
-            </div>
-          )}
 
-          <p style={{fontSize:13,fontWeight:600,color:MUTED,marginBottom:12}}>Toca una mesa para tomar el pedido. Una mesa puede tener varios pedidos, cada uno con su nombre.</p>
+          <p style={{fontSize:13,fontWeight:600,color:MUTED,marginBottom:10}}>Toca una mesa para tomar el pedido. Una mesa puede tener varios pedidos, cada uno con su nombre.</p>
+          {mapLegend}
 
           {renderMesaMap(wOrders, (m)=>{ setMesa(m); setWaiterView("order"); })}
 
           {cartCount>0 && (
-            <div style={{position:"sticky" as const,bottom:16,marginTop:16}}>
+            <div style={{position:"sticky" as const,bottom:"calc(16px + env(safe-area-inset-bottom))",marginTop:16}}>
               <button onClick={()=>setWaiterView("order")} style={{...btn(RED,"#fff"),width:"100%",height:56,fontSize:15,boxShadow:"0 8px 24px rgba(122,30,58,0.4)"}}>
-                Continuar pedido de {mesa} · {$(cartTotal)}
+                Continuar pedido de {mesa} · {cartCount} · {$(cartTotal)}
               </button>
             </div>
           )}
@@ -1934,11 +2105,6 @@ export default function App() {
                 )}
               </div>
 
-              {sentMsg && (
-                <div style={{background:"rgba(47,125,50,0.2)",border:`1px solid ${GREEN}`,borderRadius:12,padding:"12px 14px",fontSize:13,fontWeight:700,color:"#7ECF81"}}>
-                  {sentMsg}
-                </div>
-              )}
 
               <button disabled={cartCount===0} onClick={()=>setModal(true)}
                 style={{...btn(RED,"#fff",cartCount===0),height:54,fontSize:16,fontWeight:800,width:"100%"}}>
@@ -1948,24 +2114,26 @@ export default function App() {
 
             {/* Products area — mobile-first vertical list */}
             <main style={{paddingBottom:100}}>
-              {/* Sticky header: búsqueda + categorías */}
-              <div style={{position:"sticky" as const,top:0,zIndex:10,background:CREAM,borderBottom:`1px solid ${BORDER}`,padding:"10px 16px"}}>
-                {/* Volver al mapa + mesa actual */}
-                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap" as const}}>
-                  <button onClick={()=>setWaiterView("map")} style={{padding:"8px 14px",borderRadius:10,fontSize:13,fontWeight:800,fontFamily:FONT,
-                    background:DARK,color:"#fff",border:"none",cursor:"pointer"}}>
-                    ← Mesas
+              {/* Cabecera fija: volver + mesa + buscador + categorías (sin fila de
+                  mesas en el teléfono: la mesa ya se eligió en el mapa) */}
+              <div style={{position:"sticky" as const,top:56,zIndex:10,background:"rgba(237,224,206,0.94)",WebkitBackdropFilter:"blur(10px)",backdropFilter:"blur(10px)",borderBottom:`1px solid ${BORDER}`,padding:"10px 16px 8px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,minWidth:0}}>
+                  <button onClick={()=>setWaiterView("map")} aria-label="Volver a mesas"
+                    style={{height:42,padding:"0 12px 0 8px",borderRadius:12,fontSize:14,fontWeight:800,fontFamily:FONT,background:DARK,color:"#fff",border:"none",cursor:"pointer",display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>
+                    <IconBack size={18} strokeWidth={2.6}/> Mesas
                   </button>
-                  <span style={{fontSize:16,fontWeight:900,color:DARK}}>{mesa}</span>
-                  {(()=>{
-                    const existing = mesaOrdersOf(wOrders, mesa);
-                    return existing.length>0 ? (
-                      <button onClick={()=>setShowMesaPreview(v=>!v)}
-                        style={{fontSize:12,fontWeight:700,color:"#8A6210",background:"rgba(181,137,74,0.18)",border:"none",borderRadius:99,padding:"4px 10px",cursor:"pointer",fontFamily:FONT}}>
-                        Ya tiene {existing.length} pedido{existing.length>1?"s":""}: {existing.map(o=>o.customer_name||`#${o.order_number}`).join(", ")} {showMesaPreview?"▲":"▼"}
-                      </button>
-                    ) : null;
-                  })()}
+                  <div style={{minWidth:0,flex:1}}>
+                    <p style={{fontSize:18,fontWeight:900,color:DARK,lineHeight:1.1,whiteSpace:"nowrap" as const,overflow:"hidden",textOverflow:"ellipsis"}}>{mesa}</p>
+                    {(()=>{
+                      const existing = mesaOrdersOf(wOrders, mesa);
+                      return existing.length>0 ? (
+                        <button onClick={()=>setShowMesaPreview(v=>!v)} aria-expanded={showMesaPreview}
+                          style={{fontSize:12,fontWeight:800,color:"#8A6210",background:"none",border:"none",padding:0,cursor:"pointer",fontFamily:FONT,maxWidth:"100%",whiteSpace:"nowrap" as const,overflow:"hidden",textOverflow:"ellipsis",display:"block",textAlign:"left" as const}}>
+                          Ya tiene {existing.length} pedido{existing.length>1?"s":""}: {existing.map(o=>o.customer_name||`#${o.order_number}`).join(", ")} {showMesaPreview?"▲":"▼"}
+                        </button>
+                      ) : <p style={{fontSize:12,fontWeight:700,color:MUTED}}>Mesa libre</p>;
+                    })()}
+                  </div>
                 </div>
 
                 {/* Previsualización de lo ya pedido en esta mesa — para no duplicar */}
@@ -1975,15 +2143,16 @@ export default function App() {
                   const physicalTable = !/llevar|delivery|domicilio/i.test(mesa);
                   const canRelease = physicalTable && existing.length>0 && existing.every(o=>o.payment_status==="paid" && o.status==="listo");
                   return existing.length>0 ? (
-                    <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,padding:"10px 12px",marginBottom:10,display:"flex",flexDirection:"column" as const,gap:10}}>
+                    <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:12,padding:"10px 12px",marginBottom:10,display:"flex",flexDirection:"column" as const,gap:10,maxHeight:"40vh",overflowY:"auto" as const}}>
                       {existing.map(o=>(
                         <div key={o.id}>
-                          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-                            <span style={{fontSize:12,fontWeight:800,color:DARK}}>#{o.order_number}{o.customer_name?` · ${o.customer_name}`:""}</span>
-                            <span style={{fontSize:10,fontWeight:700,color:"#8A6210",background:"rgba(181,137,74,0.18)",borderRadius:99,padding:"2px 8px"}}>{statusLabel[o.status]||o.status}</span>
+                          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap" as const}}>
+                            <span style={{fontSize:13,fontWeight:800,color:DARK}}>#{o.order_number}{o.customer_name?` · ${o.customer_name}`:""}</span>
+                            <span style={{fontSize:11,fontWeight:800,color:"#8A6210",background:"rgba(181,137,74,0.18)",borderRadius:99,padding:"2px 8px"}}>{statusLabel[o.status]||o.status}</span>
+                            {o.payment_status==="paid" && <span style={{fontSize:11,fontWeight:800,color:SLATE,background:"rgba(79,109,138,0.14)",borderRadius:99,padding:"2px 8px"}}>Pagado</span>}
                           </div>
                           {(o.order_items||[]).map(i=>(
-                            <p key={i.id} style={{fontSize:12,fontWeight:600,color:MUTED,paddingLeft:4,margin:"2px 0"}}>
+                            <p key={i.id} style={{fontSize:13,fontWeight:600,color:MUTED,paddingLeft:4,margin:"2px 0"}}>
                               {i.quantity}× {i.product_name}{i.notes?` — ${i.notes}`:""}
                             </p>
                           ))}
@@ -1992,7 +2161,7 @@ export default function App() {
                       ))}
                       {canRelease && (
                         <button onClick={()=>askConfirm(`¿Liberar ${mesa}? La mesa quedará disponible para un nuevo cliente.`,()=>releaseTable(mesa))}
-                          style={{...btn(GREEN,"#fff"),width:"100%",height:42,fontSize:13}}>
+                          style={{...btn(GREEN,"#fff"),width:"100%",height:46,fontSize:14}}>
                           Liberar mesa
                         </button>
                       )}
@@ -2001,46 +2170,32 @@ export default function App() {
                 })()}
 
                 {/* Búsqueda */}
-                <input
-                  type="search"
-                  placeholder="Buscar producto..."
-                  value={search}
-                  onChange={e=>{setSearch(e.target.value);}}
-                  style={{width:"100%",padding:"11px 16px",borderRadius:12,border:`1.5px solid ${search?RED:BORDER}`,
-                    background:CARD,color:DARK,fontSize:15,fontWeight:600,fontFamily:FONT,outline:"none",marginBottom:10}}
-                />
-                {/* Mesa selector — solo en móvil */}
-                <div className="mesa-chips-row" style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,scrollbarWidth:"none" as const}}>
-                  {mesasList.map(m=>(
-                    <button key={m} onClick={()=>setMesa(m)} style={{
-                      padding:"8px 14px",borderRadius:99,fontSize:13,fontWeight:700,whiteSpace:"nowrap" as const,
-                      border:"none",cursor:"pointer",fontFamily:FONT,flexShrink:0,
-                      background:mesa===m?DARK:"rgba(23,18,15,0.07)",
-                      color:mesa===m?"#fff":MUTED}}>
-                      {m}
+                <div style={{position:"relative" as const,marginBottom:8}}>
+                  <span style={{position:"absolute" as const,left:13,top:"50%",transform:"translateY(-50%)",color:search?RED:MUTED,display:"flex",pointerEvents:"none"}}><IconSearch size={18}/></span>
+                  <input
+                    type="search"
+                    placeholder="Buscar producto…"
+                    aria-label="Buscar producto"
+                    enterKeyHint="search"
+                    value={search}
+                    onChange={e=>{setSearch(e.target.value);}}
+                    style={{width:"100%",height:46,padding:"0 40px 0 40px",borderRadius:12,border:`1.5px solid ${search?RED:BORDER}`,
+                      background:"#fff",color:DARK,fontSize:15,fontWeight:600,fontFamily:FONT,outline:"none"}}
+                  />
+                  {search && (
+                    <button onClick={()=>setSearch("")} aria-label="Borrar búsqueda"
+                      style={{position:"absolute" as const,right:4,top:"50%",transform:"translateY(-50%)",width:38,height:38,borderRadius:10,background:"transparent",border:"none",color:MUTED,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      <IconClose size={18}/>
                     </button>
-                  ))}
+                  )}
                 </div>
-                {/* Category chips — ocultos cuando hay búsqueda activa */}
-                {!search && <div style={{display:"flex",gap:8,overflowX:"auto",scrollbarWidth:"none" as const,paddingTop:2}}>
-                  {cats.map(c=>(
-                    <button key={c} onClick={()=>setCat(c)} style={{
-                      padding:"10px 20px",borderRadius:99,fontWeight:700,fontSize:14,
-                      whiteSpace:"nowrap" as const,border:"none",cursor:"pointer",fontFamily:FONT,flexShrink:0,
-                      background:cat===c?RED:CREAM2,color:cat===c?"#fff":DARK,
-                      boxShadow:cat===c?`0 4px 12px rgba(122,30,58,0.25)`:"none"}}>
-                      {c}
-                    </button>
-                  ))}
-                </div>}
+                {/* Categorías — carrusel en una línea; ocultas cuando hay búsqueda activa */}
+                {!search && cats.length>0 && (
+                  <NavPills size="sm" ariaLabel="Categorías" active={cat||cats[0]} onChange={c=>{haptic();setCat(c);}}
+                    items={cats.map(c=>({key:c,label:c,badge:cartItems.filter(i=>i.category===c).reduce((s,i)=>s+i.qty,0)||undefined}))}/>
+                )}
+                {search && <p style={{fontSize:13,fontWeight:700,color:MUTED,padding:"2px 2px 4px"}}>{visProd.length} resultado{visProd.length===1?"":"s"} para “{search}”</p>}
               </div>
-
-              {/* Success message */}
-              {sentMsg && (
-                <div style={{margin:"12px 16px 0",background:"rgba(47,125,50,0.1)",border:`1.5px solid ${GREEN}`,borderRadius:12,padding:"12px 16px",fontSize:14,fontWeight:700,color:GREEN}}>
-                  {sentMsg}
-                </div>
-              )}
 
               {/* Productos: filas compactas y escaneables, no mosaicos cuadrados. */}
               <div className="product-grid product-row-grid" style={{padding:"12px 16px 0",display:"grid",gridTemplateColumns:"1fr",gap:8}}>
@@ -2060,11 +2215,11 @@ export default function App() {
                             <p style={{fontSize:16,fontWeight:900,color:DARK,lineHeight:1.15,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" as const}}>{p.name}</p>
                             <span style={{fontSize:14,fontWeight:900,color:RED,whiteSpace:"nowrap" as const}}>{$(p.price)}</span>
                             {p.description && (
-                              <button aria-label={`Ver detalle de ${p.name}`} onClick={()=>setExpandedDesc(expandedDesc===p.id?null:p.id)}
-                                style={{flexShrink:0,width:22,height:22,borderRadius:"50%",background:CREAM2,border:`1px solid ${BORDER}`,
-                                  cursor:"pointer",fontSize:12,fontWeight:900,color:MUTED,fontFamily:FONT,
+                              <button aria-label={`Ver detalle de ${p.name}`} aria-expanded={expandedDesc===p.id} onClick={()=>setExpandedDesc(expandedDesc===p.id?null:p.id)}
+                                style={{flexShrink:0,width:34,height:34,margin:"-8px -6px -8px -4px",borderRadius:"50%",background:"transparent",border:"none",
+                                  cursor:"pointer",color:expandedDesc===p.id?RED:MUTED,
                                   display:"flex",alignItems:"center",justifyContent:"center"}}>
-                                i
+                                <IconInfo size={18}/>
                               </button>
                             )}
                           </div>
@@ -2079,17 +2234,17 @@ export default function App() {
 
                       <div className="product-row-control">
                         {qty===0 ? (
-                          <button aria-label={`Añadir ${p.name}`} onClick={()=>changeQty(p.id,1)} style={{
-                            height:40,minWidth:88,padding:"0 14px",borderRadius:10,fontSize:13,fontWeight:900,
+                          <button aria-label={`Añadir ${p.name}`} onClick={()=>{haptic();changeQty(p.id,1);}} style={{
+                            height:44,minWidth:96,padding:"0 16px",borderRadius:12,fontSize:14,fontWeight:900,
                             background:DARK,color:"#fff",border:"none",cursor:"pointer",fontFamily:FONT,
                             display:"flex",alignItems:"center",justifyContent:"center",gap:6,flexShrink:0}}>
-                            <span style={{fontSize:18,lineHeight:1}}>+</span> Añadir
+                            <IconPlus size={17} strokeWidth={2.8}/> Añadir
                           </button>
                         ) : (
-                          <div aria-label={`${qty} ${p.name} en el pedido`} style={{display:"flex",alignItems:"center",height:40,borderRadius:10,overflow:"hidden",border:`1.5px solid ${RED}`,flexShrink:0,background:"#fff"}}>
-                            <button aria-label={`Quitar ${p.name}`} onClick={()=>changeQty(p.id,-1)} style={{width:38,height:"100%",fontSize:20,fontWeight:900,background:"transparent",color:RED,border:"none",cursor:"pointer",fontFamily:FONT}}>−</button>
-                            <span style={{fontSize:15,fontWeight:900,color:DARK,minWidth:28,textAlign:"center" as const}}>{qty}</span>
-                            <button aria-label={`Añadir otro ${p.name}`} onClick={()=>changeQty(p.id,1)} style={{width:38,height:"100%",fontSize:20,fontWeight:900,background:RED,color:"#fff",border:"none",cursor:"pointer",fontFamily:FONT}}>+</button>
+                          <div aria-label={`${qty} ${p.name} en el pedido`} style={{display:"flex",alignItems:"center",height:44,borderRadius:12,overflow:"hidden",border:`1.5px solid ${RED}`,flexShrink:0,background:"#fff"}}>
+                            <button aria-label={`Quitar ${p.name}`} onClick={()=>{haptic();changeQty(p.id,-1);}} style={{width:46,height:"100%",background:"transparent",color:RED,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>{qty===1?<IconTrash size={18}/>:<IconMinus size={19} strokeWidth={2.8}/>}</button>
+                            <span style={{fontSize:16,fontWeight:900,color:DARK,minWidth:30,textAlign:"center" as const}}>{qty}</span>
+                            <button aria-label={`Añadir otro ${p.name}`} onClick={()=>{haptic();changeQty(p.id,1);}} style={{width:46,height:"100%",background:RED,color:"#fff",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><IconPlus size={19} strokeWidth={2.8}/></button>
                           </div>
                         )}
                       </div>
@@ -2102,8 +2257,8 @@ export default function App() {
                             {(notesBycat[p.category]||[]).map(({note:n})=>{
                               const active = cart[p.id]?.notes.includes(n);
                               return (
-                                <button key={n} onClick={()=>toggleNote(p.id,n)} style={{
-                                  padding:"6px 12px",borderRadius:99,fontSize:12,fontWeight:700,fontFamily:FONT,
+                                <button key={n} onClick={()=>{haptic();toggleNote(p.id,n);}} aria-pressed={active} style={{
+                                  minHeight:36,padding:"6px 13px",borderRadius:99,fontSize:13,fontWeight:700,fontFamily:FONT,
                                   border:`1.5px solid ${active?RED:BORDER}`,cursor:"pointer",
                                   background:active?`rgba(225,59,45,0.08)`:"transparent",
                                   color:active?RED:MUTED}}>
@@ -2134,7 +2289,7 @@ export default function App() {
           <div className="mobile-cart-bar" style={{position:"fixed" as const,bottom:0,left:0,right:0,background:DARK,padding:"12px 16px calc(16px + env(safe-area-inset-bottom))",display:"flex",alignItems:"center",gap:12,zIndex:50,boxShadow:"0 -8px 32px rgba(23,18,15,0.35)"}}>
             <div style={{flex:1}}>
               <p style={{fontSize:12,color:"rgba(255,255,255,0.4)",fontWeight:600,marginBottom:2}}>{cartCount===0?"Sin productos":cartCount===1?"1 producto":`${cartCount} productos`} · {mesa}</p>
-              <p style={{fontSize:26,fontWeight:900,color: cartCount>0?"#fff":"rgba(255,255,255,0.3)",lineHeight:1}}>{$(cartTotal)}</p>
+              <p ref={cartTotalRef} style={{fontSize:26,fontWeight:900,color: cartCount>0?"#fff":"rgba(255,255,255,0.3)",lineHeight:1,transformOrigin:"left center",display:"inline-block"}}>{$(cartTotal)}</p>
             </div>
             <button disabled={cartCount===0} onClick={()=>setModal(true)} style={{
               height:58,padding:"0 24px",borderRadius:16,fontSize:16,fontWeight:800,fontFamily:FONT,
@@ -2142,7 +2297,7 @@ export default function App() {
               border:"none",cursor:cartCount>0?"pointer":"not-allowed",
               boxShadow:cartCount>0?`0 4px 20px rgba(225,59,45,0.5)`:"none",
               minWidth:150}}>
-              {cartCount>0?"Revisar pedido →":"Agrega algo"}
+              {cartCount>0?"Revisar pedido →":"Agrega productos"}
             </button>
           </div>
         </div>
@@ -2158,19 +2313,23 @@ export default function App() {
         <div style={{padding:16,maxWidth:1100,margin:"0 auto",width:"100%"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap" as const,gap:10}}>
             <div>
-              <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:2}}>Módulo</p>
-              <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK}}>{stationLabel}</h1>
+              <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK,lineHeight:1.1}}>{stationLabel}</h1>
+              {wakeLockOn && (
+                <p style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:12,fontWeight:800,color:GREEN,marginTop:4}}>
+                  <IconSun size={14}/> Pantalla siempre encendida
+                </p>
+              )}
             </div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
               <button onClick={()=>{setWasteOrderCtx(null);setNewWaste({product_id:"",quantity:"1",reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
-                style={{...btn("rgba(198,40,40,0.1)",ALERT_RED),height:44,padding:"0 16px",fontSize:14,border:`1.5px solid ${ALERT_RED}44`}}>
-                🗑 Dar de baja
+                style={{...btn("rgba(198,40,40,0.1)",ALERT_RED),height:44,padding:"0 14px",fontSize:14,gap:6,border:`1.5px solid ${ALERT_RED}44`}}>
+                <IconTrash size={17}/> Dar de baja
               </button>
-              <button onClick={playBeep} style={{...btn(CREAM2,DARK),height:44,padding:"0 16px",fontSize:14}}>
-                🔊 Probar sonido
+              <button onClick={playBeep} aria-label="Probar sonido" title="Probar sonido" style={{...btn(CREAM2,DARK),height:44,padding:"0 14px",fontSize:14,gap:6}}>
+                <IconSound size={17}/><span className="hide-sm">Probar sonido</span>
               </button>
-              <button onClick={()=>loadKitchen(station)} style={{...btn(CREAM2,DARK),height:44,padding:"0 18px",fontSize:14}}>
-                {kLoading?"Cargando…":"↻ Actualizar"}
+              <button onClick={()=>loadKitchen(station)} aria-label="Actualizar" style={{...btn(CREAM2,DARK),height:44,padding:"0 14px",fontSize:14,gap:6}}>
+                <IconRefresh size={17} style={kLoading?{animation:"spin .8s linear infinite"}:undefined}/><span className="hide-sm">Actualizar</span>
               </button>
             </div>
           </div>
@@ -2179,7 +2338,7 @@ export default function App() {
             <div style={{marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap" as const,
               background:"rgba(181,137,74,0.12)",border:`1.5px solid ${GOLD}`,borderRadius:12,padding:"12px 16px"}}>
               <span style={{fontSize:13,fontWeight:700,color:DARK,flex:1,minWidth:200}}>
-                🔔 Activá las notificaciones para que avise aunque esta pestaña esté en segundo plano.
+                <IconBell size={16} style={{verticalAlign:"-3px",marginRight:6}}/>Activa las notificaciones para que avise aunque esta pestaña esté en segundo plano.
               </span>
               <button onClick={requestNotifPermission} style={{...btn(GOLD,DARK),height:38,padding:"0 16px",fontSize:13}}>Activar</button>
             </div>
@@ -2187,7 +2346,7 @@ export default function App() {
           {notifPermission==="denied" && (
             <div style={{marginBottom:14,background:"#FFF6DD",border:"1.5px solid #D4A000",borderRadius:12,padding:"10px 16px"}}>
               <span style={{fontSize:12,fontWeight:700,color:"#8A6210"}}>
-                Las notificaciones están bloqueadas en este navegador — para activarlas hay que habilitarlas manualmente en la configuración del sitio (el ícono de candado junto a la dirección).
+                Notificaciones bloqueadas: actívalas desde el candado junto a la dirección.
               </span>
             </div>
           )}
@@ -2215,8 +2374,8 @@ export default function App() {
           </div>
 
           {/* Leyenda de tiempos */}
-          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap" as const,marginBottom:16,padding:"10px 14px",background:CARD,border:`1px solid ${BORDER}`,borderRadius:12}}>
-            <span style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em"}}>Tiempo en cocina:</span>
+          <div style={{display:"flex",alignItems:"center",gap:12,overflowX:"auto" as const,scrollbarWidth:"none" as const,whiteSpace:"nowrap" as const,marginBottom:12,padding:"8px 12px",background:CARD,border:`1px solid ${BORDER}`,borderRadius:12}}>
+            <span style={{display:"inline-flex",color:MUTED}}><IconClock size={16}/></span>
             {[
               {c:GREEN,l:"0–10 min"},
               {c:ORANGE,l:"10–15 min"},
@@ -2226,17 +2385,17 @@ export default function App() {
                 <span style={{width:12,height:12,borderRadius:"50%",background:c,display:"inline-block"}}/>{l}
               </span>
             ))}
-            <span style={{fontSize:12,fontWeight:600,color:MUTED}}>(parpadea a los 20 min)</span>
+            <span style={{fontSize:12,fontWeight:600,color:MUTED}}>· parpadea a los 20</span>
           </div>
 
           {/* Resumen del día */}
           {kSummary.length>0 && (
-            <div style={{...card,padding:"12px 16px",marginBottom:16}}>
-              <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:10}}>Más pedido hoy</p>
-              <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
+            <div style={{marginBottom:16}}>
+              <p style={{fontSize:11,fontWeight:800,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:6}}>Más pedido hoy</p>
+              <div style={{display:"flex",gap:8,overflowX:"auto" as const,scrollbarWidth:"none" as const,paddingBottom:2}}>
                 {kSummary.map((s,i)=>(
                   <div key={s.name} style={{
-                    padding:"6px 14px",borderRadius:99,fontSize:13,fontWeight:800,
+                    padding:"6px 14px",borderRadius:99,fontSize:13,fontWeight:800,whiteSpace:"nowrap" as const,flexShrink:0,
                     background:i===0?RED:i===1?GOLD:CREAM2,
                     color:i===0?"#fff":i===1?DARK:DARK,
                   }}>
@@ -2253,7 +2412,7 @@ export default function App() {
               <p style={{fontSize:14,color:MUTED,marginTop:4}}>Los nuevos pedidos aparecerán aquí</p>
             </div>
           ) : (
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(290px,1fr))",gap:12}}>
+            <div ref={kitchenListRef} style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(290px,1fr))",gap:12}}>
               {kOrders.map(o=>{
                 const time=new Date(o.created_at).toLocaleTimeString("es-EC",{hour:"2-digit",minute:"2-digit"});
                 const mins=Math.floor((Date.now()-new Date(o.created_at).getTime())/60000);
@@ -2262,7 +2421,7 @@ export default function App() {
                 const stationStatus: OrderItem["item_status"] = stationItems.some(i=>i.item_status==="preparando") ? "preparando" : "enviado";
                 const stationBusy = updating===o.id;
                 return (
-                  <div key={o.id} style={{...card,padding:16,
+                  <div key={o.id} data-flip-id={o.id} style={{...card,padding:16,
                     border:stationStatus==="enviado"?`2px solid ${RED}`:`1px solid ${BORDER}`,
                     borderLeft:`6px solid ${kitchenTimeColor(mins)}`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
@@ -2281,10 +2440,10 @@ export default function App() {
                             <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
                               <span style={{fontWeight:800}}>{$(i.quantity*i.unit_price)}</span>
                               {i.product_id && (
-                                <button title="Se quemó / cayó / etc. — dar de baja este producto"
+                                <button title="Se quemó / cayó / etc. — dar de baja este producto" aria-label={`Dar de baja ${i.product_name}`}
                                   onClick={()=>{setWasteOrderCtx(o);setNewWaste({product_id:i.product_id,quantity:String(i.quantity),reason:WASTE_REASONS[0],notes:""});setWasteModal(true);}}
-                                  style={{width:26,height:26,borderRadius:8,border:"none",cursor:"pointer",background:"rgba(198,40,40,0.1)",color:ALERT_RED,fontSize:13,fontFamily:FONT,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                                  🗑
+                                  style={{width:36,height:36,borderRadius:10,border:"none",cursor:"pointer",background:"rgba(198,40,40,0.1)",color:ALERT_RED,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                                  <IconTrash size={17}/>
                                 </button>
                               )}
                             </div>
@@ -2302,7 +2461,8 @@ export default function App() {
                       <span style={{fontSize:20,fontWeight:900,color:GOLD}}>{$(o.total)}</span>
                     </div>
                     <button disabled={stationBusy} onClick={()=>stationOrderUpdate(o.id,station,stationCompletesDirectly?"listo":stationStatus==="enviado"?"preparando":"listo")}
-                      style={{...btn(stationCompletesDirectly||stationStatus==="preparando"?GREEN:GOLD,"#fff",stationBusy),width:"100%",height:46,fontSize:14}}>
+                      style={{...btn(stationCompletesDirectly||stationStatus==="preparando"?GREEN:GOLD,"#fff",stationBusy),width:"100%",height:54,fontSize:16,gap:8}}>
+                      {!stationBusy && (stationCompletesDirectly||stationStatus==="preparando") && <IconCheck size={19} strokeWidth={2.6}/>}
                       {stationBusy?"Actualizando…":stationCompletesDirectly?"Marcar barra lista":stationStatus==="enviado"?"Marcar cocina preparando":"Marcar cocina lista"}
                     </button>
                   </div>
@@ -2321,15 +2481,14 @@ export default function App() {
 
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap" as const,gap:10}}>
             <div>
-              <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:2}}>Módulo</p>
-              <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK}}>Caja</h1>
+              <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK,lineHeight:1.1}}>Caja</h1>
             </div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
-              <button onClick={openClosure} style={{...btn(DARK,"#fff"),height:44,padding:"0 16px",fontSize:14}}>
-                🧾 Cierre de caja
+              <button onClick={openClosure} style={{...btn(DARK,"#fff"),height:44,padding:"0 14px",fontSize:14,gap:6}}>
+                <IconReceipt size={17}/> Cierre de caja
               </button>
-              <button onClick={loadCashier} style={{...btn(CREAM2,DARK),height:44,padding:"0 18px",fontSize:14}}>
-                {cLoading?"Cargando…":"↻ Actualizar"}
+              <button onClick={loadCashier} aria-label="Actualizar" style={{...btn(CREAM2,DARK),height:44,padding:"0 14px",fontSize:14,gap:6}}>
+                <IconRefresh size={17} style={cLoading?{animation:"spin .8s linear infinite"}:undefined}/><span className="hide-sm">Actualizar</span>
               </button>
             </div>
           </div>
@@ -2345,7 +2504,7 @@ export default function App() {
 
           {payError && (
             <div style={{background:"#FFEBEE",border:`2px solid ${ALERT_RED}`,borderRadius:12,padding:"12px 16px",marginBottom:14,fontSize:14,fontWeight:800,color:ALERT_RED}}>
-              ⚠️ {payError}
+              {payError}
             </div>
           )}
 
@@ -2378,15 +2537,17 @@ export default function App() {
 
               {/* Mapa de mesas — toca una para abrir el pedido y cobrar */}
               <div style={{marginBottom:16}}>
-                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:10}}>Mesas</p>
-                {renderMesaMap(cOrders, openMesaModal, cashierMesa)}
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:8}}>Mesas</p>
+                {mapLegend}
+                {renderMesaMap(cOrders, openMesaModal, cashierMesa, "c")}
               </div>
 
               {(()=>{
-                const overdue=cOrders.filter(o=>o.status==="listo"&&(Date.now()-new Date(o.created_at).getTime())>20*60*1000);
+                // Solo pedidos que siguen sin cobrar: uno pagado y listo no está "sin cobrar".
+                const overdue=cOrders.filter(o=>o.status==="listo"&&o.payment_status==="pending"&&(Date.now()-new Date(o.created_at).getTime())>20*60*1000);
                 return overdue.length>0?(
                   <div style={{background:"#FEF3C7",border:"2px solid #D97706",borderRadius:12,padding:"12px 16px",marginBottom:14,display:"flex",alignItems:"center",gap:10}}>
-                    <span style={{fontSize:20}}>⚠️</span>
+                    <span style={{color:"#B45309",display:"flex"}}><IconClock size={22}/></span>
                     <div>
                       <p style={{fontSize:14,fontWeight:900,color:"#92400E",margin:0}}>
                         {overdue.length} {overdue.length===1?"pedido listo lleva":"pedidos listos llevan"} más de 20 min sin cobrar
@@ -2413,7 +2574,7 @@ export default function App() {
                         <div>
                           <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:4}}>#{o.order_number} · {time}</p>
                           <p style={{fontSize:22,fontWeight:900,color:DARK,marginBottom:2}}>{o.table_label}</p>
-                          {o.customer_name && <p style={{fontSize:13,fontWeight:800,color:GOLD,marginBottom:4}}>👤 {o.customer_name}</p>}
+                          {o.customer_name && <p style={{fontSize:13,fontWeight:800,color:GOLD,marginBottom:4}}>{o.customer_name}</p>}
                           <span style={badge(o.status)}>{o.payment_status==="paid" ? (o.status==="listo" ? "Pagado · listo para entregar" : "Pagado · en preparación") : (o.status==="listo" ? "Pendiente · listo para entregar" : "Pendiente · en preparación")}</span>
                         </div>
                         <p style={{fontSize:"clamp(22px,3vw,28px)",fontWeight:900,color:RED}}>{$(o.total)}</p>
@@ -2469,22 +2630,22 @@ export default function App() {
       {/* ── ADMIN ──────────────────────────────────────────────── */}
       {screen==="admin" && (
         <div style={{padding:16,maxWidth:1200,margin:"0 auto",width:"100%"}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap" as const,gap:10}}>
-            <div>
-              <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:2}}>Panel</p>
-              <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK}}>Administración</h1>
-            </div>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
-              <button onClick={()=>{setAdminSection("stats");loadAdminStats();}} style={{...btn(adminSection==="stats"?RED:CREAM2, adminSection==="stats"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Reportes</button>
-              <button onClick={()=>{setAdminSection("history");loadHistory();}} style={{...btn(adminSection==="history"?RED:CREAM2, adminSection==="history"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Pedidos</button>
-              <button onClick={()=>{setAdminSection("expenses");loadExpenses();}} style={{...btn(adminSection==="expenses"?RED:CREAM2, adminSection==="expenses"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Gastos</button>
-              <button onClick={()=>{setAdminSection("products");loadAdminProducts();}} style={{...btn(adminSection==="products"?RED:CREAM2, adminSection==="products"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Productos</button>
-              <button onClick={()=>{setAdminSection("notes");loadNotes();}} style={{...btn(adminSection==="notes"?RED:CREAM2, adminSection==="notes"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Notas</button>
-              <button onClick={()=>{setAdminSection("inventory");loadInventory();}} style={{...btn(adminSection==="inventory"?RED:CREAM2, adminSection==="inventory"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Inventario</button>
-              <button onClick={()=>{setAdminSection("waste");loadWaste();}} style={{...btn(adminSection==="waste"?RED:CREAM2, adminSection==="waste"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Mermas</button>
-              <button onClick={()=>{setAdminSection("users");loadUsers();}} style={{...btn(adminSection==="users"?RED:CREAM2, adminSection==="users"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Usuarios</button>
-              <button onClick={()=>{setAdminSection("config");loadConfig();loadAdminProducts();}} style={{...btn(adminSection==="config"?RED:CREAM2, adminSection==="config"?"#fff":DARK),height:40,padding:"0 16px",fontSize:13}}>Config</button>
-            </div>
+          <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK,lineHeight:1.1,marginBottom:12}}>Administración</h1>
+          {/* Secciones: una sola línea tipo carrusel, fija arriba al hacer scroll */}
+          <div style={{position:"sticky" as const,top:56,zIndex:20,margin:"0 -16px 18px",padding:"8px 16px",background:"rgba(237,224,206,0.94)",WebkitBackdropFilter:"blur(10px)",backdropFilter:"blur(10px)",borderBottom:`1px solid rgba(196,168,130,0.45)`}}>
+            <NavPills ariaLabel="Secciones de administración" active={adminSection}
+              onChange={k=>{ haptic(); openAdminSection(k); }}
+              items={[
+                {key:"stats",label:"Reportes",icon:<IconChart size={17}/>},
+                {key:"history",label:"Pedidos",icon:<IconList size={17}/>},
+                {key:"expenses",label:"Gastos",icon:<IconWallet size={17}/>},
+                {key:"products",label:"Productos",icon:<IconTag size={17}/>},
+                {key:"notes",label:"Notas",icon:<IconNote size={17}/>},
+                {key:"inventory",label:"Inventario",icon:<IconBox size={17}/>},
+                {key:"waste",label:"Mermas",icon:<IconFlame size={17}/>},
+                {key:"users",label:"Usuarios",icon:<IconUsers size={17}/>},
+                {key:"config",label:"Config",icon:<IconSettings size={17}/>},
+              ]}/>
           </div>
 
           {adminSection==="stats" && (
@@ -2541,8 +2702,8 @@ export default function App() {
                     }
                     downloadCSV(`cabane-reportes-${periodLabel()}.csv`, rows);
                   }}
-                  style={{...btn(CREAM2,DARK,!adminStats),height:38,padding:"0 14px",fontSize:13,border:`1px solid ${BORDER}`}}>
-                  ⬇ Exportar CSV
+                  style={{...btn(CREAM2,DARK,!adminStats),height:44,padding:"0 14px",fontSize:13,border:`1px solid ${BORDER}`}}>
+                  <IconDownload size={16}/> Exportar CSV
                 </button>
               ))}
 
@@ -2823,17 +2984,17 @@ export default function App() {
                             </div>
                             <div style={{display:"flex",gap:6,marginLeft:"auto"}}>
                             <button onClick={()=>setEditProd(editProd?.id===p.id?null:{id:p.id,name:p.name,category:p.category,price:String(p.price),description:p.description||""})}
-                              style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
+                              style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
                                 background:editProd?.id===p.id?GOLD:CREAM2,color:editProd?.id===p.id?"#fff":DARK}}>
                               {editProd?.id===p.id?"Cerrar":"Editar"}
                             </button>
                             <button onClick={()=>toggleProduct(p.id,(p as Product & {is_active?:boolean}).is_active!==false)}
-                              style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
+                              style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
                                 background:(p as Product & {is_active?:boolean}).is_active===false?CREAM2:GREEN,color:(p as Product & {is_active?:boolean}).is_active===false?DARK:"#fff"}}>
                               {(p as Product & {is_active?:boolean}).is_active===false?"Activar":"Activo"}
                             </button>
                             <button onClick={()=>deleteProduct(p.id)}
-                              style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
+                              style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
                               Eliminar
                             </button>
                             </div>
@@ -2874,10 +3035,12 @@ export default function App() {
             return (
               <div>
                 {/* Tabs */}
-                <div style={{display:"flex",gap:8,marginBottom:16}}>
-                  <button onClick={()=>setInvTab("stock")} style={{...btn(invTab==="stock"?RED:CREAM2,invTab==="stock"?"#fff":DARK),height:38,padding:"0 20px",fontSize:13}}>Stock</button>
-                  <button onClick={()=>setInvTab("recetas")} style={{...btn(invTab==="recetas"?RED:CREAM2,invTab==="recetas"?"#fff":DARK),height:38,padding:"0 20px",fontSize:13}}>Recetas</button>
-                  <button onClick={loadInventory} style={{...btn(CREAM2,DARK),height:38,padding:"0 14px",fontSize:13}}>↻</button>
+                <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center"}}>
+                  <div style={{flex:"0 1 280px",minWidth:0}}>
+                    <NavPills size="sm" stretch ariaLabel="Inventario" active={invTab} onChange={k=>{haptic();setInvTab(k);}}
+                      items={[{key:"stock",label:"Stock"},{key:"recetas",label:"Recetas"}]}/>
+                  </div>
+                  <button onClick={loadInventory} aria-label="Actualizar inventario" style={{...btn(CREAM2,DARK),height:44,width:44,padding:0}}><IconRefresh size={17}/></button>
                 </div>
 
                 {invTab==="stock" && (() => {
@@ -2928,7 +3091,7 @@ export default function App() {
                       {/* Banner alerta crítica */}
                       {critical.length>0 && (
                         <div style={{background:"#FFEBEE",border:"1.5px solid #C62828",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}>
-                          <span style={{fontSize:18}}>⚠️</span>
+                          <span style={{color:"#C62828",display:"flex"}}><IconInfo size={20}/></span>
                           <span style={{fontSize:13,fontWeight:700,color:"#C62828",flex:1}}>
                             {critical.length} ingrediente{critical.length>1?"s":""} agotado{critical.length>1?"s":""}: {critical.map(i=>i.name).join(", ")}
                           </span>
@@ -2943,18 +3106,18 @@ export default function App() {
                             {critical.length>0 && (
                               <button onClick={()=>sendWhatsApp("critical")}
                                 style={{display:"flex",alignItems:"center",gap:6,padding:"8px 14px",borderRadius:10,border:"none",cursor:"pointer",background:"#C62828",color:"#fff",fontSize:13,fontWeight:700,fontFamily:FONT}}>
-                                📲 Solo urgentes ({critical.length})
+                                <IconShare size={15}/> Solo urgentes ({critical.length})
                               </button>
                             )}
                             {(critical.length>0||low.length>0) && (
                               <button onClick={()=>sendWhatsApp("critical+low")}
                                 style={{display:"flex",alignItems:"center",gap:6,padding:"8px 14px",borderRadius:10,border:"none",cursor:"pointer",background:"#D4A000",color:"#fff",fontSize:13,fontWeight:700,fontFamily:FONT}}>
-                                📲 Urgentes + bajos ({critical.length+low.length})
+                                <IconShare size={15}/> Urgentes + bajos ({critical.length+low.length})
                               </button>
                             )}
                             <button onClick={()=>sendWhatsApp("all")}
                               style={{display:"flex",alignItems:"center",gap:6,padding:"8px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,cursor:"pointer",background:CARD,color:DARK,fontSize:13,fontWeight:700,fontFamily:FONT}}>
-                              📲 Lista completa
+                              <IconShare size={15}/> Lista completa
                             </button>
                           </div>
                         </div>
@@ -2966,7 +3129,7 @@ export default function App() {
                           Ingredientes ({ingredients.length}) — ordenados por urgencia
                         </p>
                         <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:14}}>
-                          <input aria-label="Buscar ingrediente" placeholder="🔎 Buscar ingrediente…" value={ingredientSearch} onChange={e=>setIngredientSearch(e.target.value)}
+                          <input aria-label="Buscar ingrediente" placeholder="Buscar ingrediente…" value={ingredientSearch} onChange={e=>setIngredientSearch(e.target.value)}
                             style={{flex:1,padding:"10px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
                           {ingredientSearch && <button onClick={()=>setIngredientSearch("")} style={{...btn(CREAM2,DARK),height:38,padding:"0 12px",fontSize:12}}>Limpiar</button>}
                         </div>
@@ -2995,15 +3158,15 @@ export default function App() {
                                   </div>
                                   <div style={{display:"flex",gap:6,flexShrink:0,marginLeft:"auto"}}>
                                     <button onClick={()=>{setRestockId(isRestock?null:ingr.id);setRestockAmt("");setEditIngr(null);}}
-                                      style={{padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",background:isRestock?GREEN:CREAM2,color:isRestock?"#fff":DARK}}>
+                                      style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",background:isRestock?GREEN:CREAM2,color:isRestock?"#fff":DARK}}>
                                       {isRestock?"✕":"+ Stock"}
                                     </button>
                                     <button onClick={()=>{setEditIngr(isEdit?null:{id:ingr.id,name:ingr.name,unit:ingr.unit,stock_min:String(ingr.stock_min)});setRestockId(null);setRestockAmt("");}}
-                                      style={{padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",background:isEdit?GOLD:CREAM2,color:isEdit?"#fff":DARK}}>
+                                      style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",background:isEdit?GOLD:CREAM2,color:isEdit?"#fff":DARK}}>
                                       {isEdit?"✕":"Editar"}
                                     </button>
                                     <button onClick={()=>deleteIngredient(ingr.id)}
-                                      style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
+                                      style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
                                       ✕
                                     </button>
                                   </div>
@@ -3097,7 +3260,7 @@ export default function App() {
                                   <span style={{flex:1,fontSize:14,fontWeight:700,color:DARK}}>{ingr?.name||"?"}</span>
                                   <span style={{fontSize:14,fontWeight:900,color:RED}}>{r.quantity} {ingr?.unit}</span>
                                   <button onClick={()=>deleteRecipeLine(r.id)}
-                                    style={{padding:"5px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
+                                    style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
                                     Quitar
                                   </button>
                                 </div>
@@ -3135,8 +3298,14 @@ export default function App() {
             const OPEN_STATUSES = ["enviado","preparando","listo"];
             const shown = histStatus==="abiertos"
               ? histOrders.filter(o=>OPEN_STATUSES.includes(o.status) && o.payment_status==="pending")
-              : histStatus==="pagado" ? histOrders.filter(o=>o.payment_status==="paid") : histOrders.filter(o=>o.status==="cancelado");
-            const totalPeriod = histOrders.filter(o=>o.payment_status==="paid").reduce((s,o)=>s+o.total,0);
+              : histStatus==="pagado" ? histOrders.filter(o=>o.payment_status==="paid" && o.status!=="cancelado") : histOrders.filter(o=>o.status==="cancelado");
+            // Contadores por filtro: "pagado" ya no es un status (Fase 12), se cuenta por payment_status.
+            const histCount = {
+              pagado: histOrders.filter(o=>o.payment_status==="paid" && o.status!=="cancelado").length,
+              cancelado: histOrders.filter(o=>o.status==="cancelado").length,
+              abiertos: histOrders.filter(o=>OPEN_STATUSES.includes(o.status) && o.payment_status==="pending").length,
+            };
+            const totalPeriod = histOrders.filter(o=>o.payment_status==="paid" && o.status!=="cancelado").reduce((s,o)=>s+o.total,0);
             const methodLabel: Record<string,string> = { efectivo:"Efectivo", tarjeta:"Tarjeta", transferencia:"Transferencia" };
             const statusLabel: Record<string,string> = { pagado:"Pagado", cancelado:"Cancelado", enviado:"Nuevo", preparando:"En prep.", listo:"Listo" };
             const allShownSelected = shown.length>0 && shown.every(o=>histSelected.has(o.id));
@@ -3158,14 +3327,17 @@ export default function App() {
                 <div style={{display:"flex",gap:10,flexWrap:"wrap" as const,alignItems:"center",marginBottom:16}}>
                   <div style={{background:DARK,borderRadius:12,padding:"12px 18px"}}>
                     <p style={{fontSize:20,fontWeight:900,color:GOLD,lineHeight:1}}>{$(totalPeriod)}</p>
-                    <p style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase" as const,letterSpacing:"0.08em",marginTop:3}}>{histOrders.filter(o=>o.payment_status==="paid").length} cobrados</p>
+                    <p style={{fontSize:10,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase" as const,letterSpacing:"0.08em",marginTop:3}}>{histCount.pagado} cobrados</p>
                   </div>
-                  <div style={{display:"flex",gap:6,marginLeft:"auto",flexWrap:"wrap" as const}}>
-                    {(["pagado","cancelado","abiertos"] as const).map(s=>(
-                      <button key={s} onClick={()=>setHistStatus(s)} style={{...btn(histStatus===s?RED:CREAM2,histStatus===s?"#fff":DARK),height:36,padding:"0 14px",fontSize:12,minHeight:36}}>
-                        {s==="pagado"?"Pagados":s==="cancelado"?"Cancelados":"Abiertos"} ({s==="abiertos"?histOrders.filter(o=>OPEN_STATUSES.includes(o.status)).length:histOrders.filter(o=>o.status===s).length})
-                      </button>
-                    ))}
+                  <div style={{display:"flex",gap:8,marginLeft:"auto",flexWrap:"wrap" as const,alignItems:"center",minWidth:0,flex:"1 1 320px",justifyContent:"flex-end"}}>
+                    <div style={{flex:"1 1 280px",maxWidth:420,minWidth:0}}>
+                      <NavPills size="sm" stretch ariaLabel="Estado de pedidos" active={histStatus} onChange={k=>{haptic();setHistStatus(k);}}
+                        items={[
+                          {key:"pagado",label:"Pagados",badge:histCount.pagado},
+                          {key:"cancelado",label:"Cancelados",badge:histCount.cancelado},
+                          {key:"abiertos",label:"Abiertos",badge:histCount.abiertos},
+                        ]}/>
+                    </div>
                     <button disabled={!shown.length} onClick={()=>{
                         const rows: (string|number)[][] = [["Pedido","Mesa","Cliente","Estado","Fecha pedido","Fecha cobro","Método(s)","Total","Tomado por","Cobrado por"]];
                         shown.forEach(o=>{
@@ -3180,8 +3352,8 @@ export default function App() {
                         });
                         downloadCSV(`cabane-pedidos-${histStatus}-${periodLabel()}.csv`, rows);
                       }}
-                      style={{...btn(CREAM2,DARK,!shown.length),height:36,padding:"0 14px",fontSize:12,minHeight:36,border:`1px solid ${BORDER}`}}>
-                      ⬇ Exportar CSV
+                      style={{...btn(CREAM2,DARK,!shown.length),height:44,padding:"0 14px",fontSize:13,minHeight:44,border:`1px solid ${BORDER}`}}>
+                      <IconDownload size={16}/> Exportar CSV
                     </button>
                   </div>
                 </div>
@@ -3314,7 +3486,7 @@ export default function App() {
                       downloadCSV(`cabane-gastos-${periodLabel()}.csv`, rows);
                     }}
                     style={{...btn(CREAM2,DARK,!expenses.length),height:36,padding:"0 14px",fontSize:12,minHeight:36,border:`1px solid ${BORDER}`}}>
-                    ⬇ Exportar CSV
+                    <IconDownload size={16}/> Exportar CSV
                   </button>
                 </div>
 
@@ -3362,7 +3534,7 @@ export default function App() {
                         </div>
                         <span style={{fontSize:15,fontWeight:900,color:ALERT_RED}}>−{$(e.amount)}</span>
                         <button onClick={()=>deleteExpense(e.id)}
-                          style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
+                          style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
                           ✕
                         </button>
                       </div>
@@ -3384,12 +3556,12 @@ export default function App() {
                         </div>
                         <span style={{fontSize:15,fontWeight:900,color:DARK}}>{$(f.amount)}<span style={{fontSize:11,fontWeight:600,color:MUTED}}>/mes</span></span>
                         <button onClick={()=>toggleFixed(f.id,f.active)}
-                          style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
+                          style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
                             background:f.active?GREEN:CREAM2,color:f.active?"#fff":DARK}}>
                           {f.active?"Activo":"Pausado"}
                         </button>
                         <button onClick={()=>deleteFixed(f.id)}
-                          style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
+                          style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
                           ✕
                         </button>
                       </div>
@@ -3498,7 +3670,7 @@ export default function App() {
                         </div>
                         <span style={{fontSize:14,fontWeight:900,color:ALERT_RED}}>−{$(w.quantity*w.unit_price)}</span>
                         <button onClick={()=>deleteWaste(w.id)}
-                          style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
+                          style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
                           ✕
                         </button>
                       </div>
@@ -3523,7 +3695,7 @@ export default function App() {
                   const on = roles.includes(r);
                   return (
                     <button key={r} type="button" onClick={()=>onToggle(r)}
-                      style={{padding:"6px 12px",borderRadius:999,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1.5px solid ${on?roleBg[r]:BORDER}`,cursor:"pointer",
+                      style={{minHeight:40,padding:"6px 14px",borderRadius:999,fontSize:13,fontWeight:700,fontFamily:FONT,border:`1.5px solid ${on?roleBg[r]:BORDER}`,cursor:"pointer",
                         background:on?roleBg[r]:"#fff",color:on?roleFg[r]:MUTED}}>
                       {roleLabels[r]}
                     </button>
@@ -3660,12 +3832,12 @@ export default function App() {
                       <button disabled={i===cfgTables.length-1} onClick={()=>swapSort("tables",cfgTables,i,1)}
                         style={{width:32,height:32,borderRadius:8,border:`1px solid ${BORDER}`,background:CREAM2,color:DARK,fontWeight:900,cursor:i===cfgTables.length-1?"not-allowed":"pointer",fontFamily:FONT,opacity:i===cfgTables.length-1?0.4:1}}>↓</button>
                       <button onClick={()=>toggleMesaCfg(t.id,t.active)}
-                        style={{padding:"6px 12px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
+                        style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
                           background:t.active?GREEN:CREAM2,color:t.active?"#fff":DARK}}>
                         {t.active?"Activa":"Pausada"}
                       </button>
                       <button onClick={()=>deleteMesaCfg(t.id,t.label)}
-                        style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>✕</button>
+                        style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>✕</button>
                     </div>
                   ))}
                 </div>
@@ -3696,7 +3868,7 @@ export default function App() {
                         <button disabled={i===cfgCats.length-1} onClick={()=>swapSort("categories",cfgCats,i,1)}
                           style={{width:32,height:32,borderRadius:8,border:`1px solid ${BORDER}`,background:CREAM2,color:DARK,fontWeight:900,cursor:i===cfgCats.length-1?"not-allowed":"pointer",fontFamily:FONT,opacity:i===cfgCats.length-1?0.4:1}}>↓</button>
                         <button onClick={()=>deleteCatCfg(c.id,c.name)}
-                          style={{padding:"6px 10px",borderRadius:8,fontSize:12,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>✕</button>
+                          style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>✕</button>
                       </div>
                     );
                   })}
@@ -3771,20 +3943,19 @@ export default function App() {
         </div>
       )}
 
+      </div>
+
       {/* ── MODAL CONFIRMACIÓN ─────────────────────────────────── */}
       {confirmDialog && (
-        <div onClick={e=>{if(e.target===e.currentTarget)setConfirmDialog(null)}}
-          style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.72)",backdropFilter:"blur(6px)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-          <div style={{...card,padding:24,width:"100%",maxWidth:320,animation:"fadeUp .2s ease both"}}>
-            <p style={{fontSize:15,fontWeight:700,color:DARK,marginBottom:20,lineHeight:1.4}}>{confirmDialog.msg}</p>
-            <div style={{display:"flex",gap:10}}>
-              <button onClick={()=>setConfirmDialog(null)}
-                style={{...btn(CREAM2,DARK),flex:1,height:44,fontSize:14,minHeight:44}}>Cancelar</button>
-              <button onClick={()=>{const fn=confirmDialog.onOk;setConfirmDialog(null);fn();}}
-                style={{...btn(RED,"#fff"),flex:1,height:44,fontSize:14,minHeight:44}}>Confirmar</button>
+        <Sheet variant="dialog" maxWidth={360} label="Confirmar" onClose={()=>setConfirmDialog(null)}
+          footer={
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <button onClick={()=>setConfirmDialog(null)} style={{...btn(CREAM2,DARK),height:50}}>Cancelar</button>
+              <button onClick={()=>{const fn=confirmDialog.onOk;setConfirmDialog(null);fn();}} style={{...btn(RED,"#fff"),height:50}}>Confirmar</button>
             </div>
-          </div>
-        </div>
+          }>
+          <p style={{fontSize:17,fontWeight:800,color:DARK,lineHeight:1.4}}>{confirmDialog.msg}</p>
+        </Sheet>
       )}
 
       {/* ── MODAL CIERRE DE CAJA ────────────────────────────────── */}
@@ -3793,17 +3964,14 @@ export default function App() {
         const expected = cPayBreakdown.efectivo;
         const diff = isNaN(counted) ? null : Math.round((counted-expected)*100)/100;
         return (
-          <div onClick={e=>{if(e.target===e.currentTarget)setClosureModal(false)}}
-            style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
-            <div style={{...card,padding:20,width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
-                <div>
-                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Cierre de caja</p>
-                  <p style={{fontSize:22,fontWeight:900,color:DARK}}>{new Date().toLocaleDateString("es-EC",{day:"2-digit",month:"long"})}</p>
-                </div>
-                <button onClick={()=>setClosureModal(false)}
-                  style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
-              </div>
+          <Sheet onClose={()=>setClosureModal(false)} maxWidth={460} eyebrow="Cierre de caja"
+            title={new Date().toLocaleDateString("es-EC",{day:"2-digit",month:"long"})}
+            footer={
+              <button disabled={isNaN(counted)||counted<0} onClick={saveClosure}
+                style={{...btn(DARK,"#fff",isNaN(counted)||counted<0),width:"100%",height:54,fontSize:16}}>
+                Guardar cierre del día
+              </button>
+            }>
 
               {closureSaved && (
                 <div style={{background:"rgba(181,137,74,0.15)",border:`1px solid ${GOLD}`,borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,fontWeight:700,color:"#8A6210"}}>
@@ -3824,7 +3992,7 @@ export default function App() {
               ))}
 
               <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",margin:"16px 0 8px"}}>Efectivo contado en caja</p>
-              <input type="number" min="0" step="0.01" placeholder="0.00" value={closureCash}
+              <input type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" value={closureCash}
                 onChange={e=>setClosureCash(e.target.value)}
                 style={{width:"100%",height:52,borderRadius:10,border:`1.5px solid ${BORDER}`,padding:"0 14px",fontSize:20,fontWeight:900,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:10}}/>
 
@@ -3842,14 +4010,8 @@ export default function App() {
               <input type="text" placeholder="Nota (opcional) — ej: $5 de caja chica para cambio"
                 value={closureNotes} onChange={e=>setClosureNotes(e.target.value)}
                 style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,
-                  fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:14}}/>
-
-              <button disabled={isNaN(counted)||counted<0} onClick={saveClosure}
-                style={{...btn(DARK,"#fff",isNaN(counted)||counted<0),width:"100%",height:52,fontSize:15}}>
-                Guardar cierre del día
-              </button>
-            </div>
-          </div>
+                  fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+          </Sheet>
         );
       })()}
 
@@ -3862,19 +4024,14 @@ export default function App() {
         const reasons = wasteOrderCtx ? WASTE_REASONS.filter(r=>r!==STAFF_REASON) : WASTE_REASONS;
         const closeWaste = () => { setWasteModal(false); setWasteOrderCtx(null); };
         return (
-          <div onClick={e=>{if(e.target===e.currentTarget)closeWaste()}}
-            style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
-            <div style={{...card,padding:20,width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
-                <div>
-                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Dar de baja</p>
-                  <p style={{fontSize:20,fontWeight:900,color:DARK}}>
-                    {wasteOrderCtx ? `Pedido #${wasteOrderCtx.order_number} · ${wasteOrderCtx.table_label}` : "Producto no cobrado"}
-                  </p>
-                </div>
-                <button onClick={closeWaste}
-                  style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
-              </div>
+          <Sheet onClose={closeWaste} maxWidth={460} eyebrow="Dar de baja"
+            title={wasteOrderCtx ? `Pedido #${wasteOrderCtx.order_number} · ${wasteOrderCtx.table_label}` : "Producto no cobrado"}
+            footer={
+              <button disabled={!newWaste.product_id||!qty||qty<=0||wasteSaving} onClick={registerWaste}
+                style={{...btn(ALERT_RED,"#fff",!newWaste.product_id||!qty||qty<=0||wasteSaving),width:"100%",height:54,fontSize:16}}>
+                {wasteSaving?"Guardando…":newWaste.product_id&&qty>0?`Registrar baja · −${$(qty*unitPrice)}`:"Registrar baja"}
+              </button>
+            }>
 
               <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:8}}>Producto</p>
               {wasteOrderCtx ? (
@@ -3899,7 +4056,7 @@ export default function App() {
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
                 <button onClick={()=>setNewWaste(w=>({...w,quantity:String(Math.max(1,(parseFloat(w.quantity)||1)-1))}))}
                   style={{width:48,height:48,borderRadius:12,fontSize:22,fontWeight:900,background:CREAM2,color:DARK,border:"none",cursor:"pointer",fontFamily:FONT}}>−</button>
-                <input type="number" min="1" value={newWaste.quantity} onChange={e=>setNewWaste(w=>({...w,quantity:e.target.value}))}
+                <input type="number" inputMode="numeric" min="1" value={newWaste.quantity} onChange={e=>setNewWaste(w=>({...w,quantity:e.target.value}))}
                   style={{flex:1,height:48,borderRadius:10,border:`1.5px solid ${BORDER}`,padding:"0 12px",fontSize:18,fontWeight:800,fontFamily:FONT,color:DARK,background:"#fff",textAlign:"center" as const,outline:"none"}}/>
                 <button onClick={()=>setNewWaste(w=>({...w,quantity:String((parseFloat(w.quantity)||0)+1)}))}
                   style={{width:48,height:48,borderRadius:12,fontSize:22,fontWeight:900,background:DARK,color:"#fff",border:"none",cursor:"pointer",fontFamily:FONT}}>+</button>
@@ -3923,24 +4080,12 @@ export default function App() {
                 style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,
                   fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:14}}/>
 
-              {newWaste.product_id && qty>0 && (
-                <div style={{background:"rgba(198,40,40,0.06)",border:`1px solid ${ALERT_RED}33`,borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between"}}>
-                  <span style={{fontSize:13,fontWeight:700,color:MUTED}}>Valor perdido</span>
-                  <span style={{fontSize:15,fontWeight:900,color:ALERT_RED}}>−{$(qty*unitPrice)}</span>
-                </div>
-              )}
-
-              <button disabled={!newWaste.product_id||!qty||qty<=0||wasteSaving} onClick={registerWaste}
-                style={{...btn(ALERT_RED,"#fff",!newWaste.product_id||!qty||qty<=0||wasteSaving),width:"100%",height:52,fontSize:15}}>
-                {wasteSaving?"Guardando…":"Registrar baja"}
-              </button>
-              <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:10}}>
+              <p style={{fontSize:12,fontWeight:600,color:MUTED}}>
                 {wasteOrderCtx
                   ? "El pedido sigue igual y se cobra normal — esto solo registra el costo del producto para volver a hacerlo."
                   : "Se descuenta el inventario de sus ingredientes (si el producto tiene receta)."}
               </p>
-            </div>
-          </div>
+          </Sheet>
         );
       })()}
 
@@ -3951,38 +4096,50 @@ export default function App() {
         if (!orders.length) return null;
         const total = orders.reduce((s,o)=>s+o.total,0);
         const pendingOrders = orders.filter(o=>o.payment_status==="pending" && o.status!=="cancelado");
+        const pendingTotal = pendingOrders.reduce((s,o)=>s+o.total,0);
         const physicalTable = !/llevar|delivery|domicilio/i.test(payModalMesa);
         const canReleaseTable = physicalTable && orders.every(o=>o.payment_status==="paid" && o.status==="listo");
         const methodLabels={efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia"};
         const methodBg={efectivo:DARK,tarjeta:RED,transferencia:GOLD};
         const methodFg={efectivo:"#fff",tarjeta:"#fff",transferencia:DARK};
-        const closeModal = () => { setPayModalMesa(null); setCashierMesa(null); };
+        const closeModal = () => { setPayModalMesa(null); setCashierMesa(null); setChargeIntent(null); };
+        const canPayWholeMesa = paymentSchemaReady && pendingOrders.length>1 && !pendingOrders.some(o=>partiallyPaidOrders.has(o.id));
+        // Cobro en dos pasos: tocar el método solo lo elige; el cobro se hace
+        // con el botón de confirmar, que repite monto y método.
+        const pickMethod = (target: string, m: "efectivo"|"tarjeta"|"transferencia") => {
+          haptic();
+          setChargeIntent(prev => prev?.target===target && prev.method===m ? null : {target, method:m});
+        };
+        const confirmBtn = (label: string, amount: number, onConfirm: ()=>void, busy=false) => (
+          <div style={{display:"flex",gap:8,marginTop:9}}>
+            <button onClick={()=>setChargeIntent(null)} aria-label="Cancelar cobro" className="cb-icon-btn" style={{height:52,width:52}}>
+              <IconClose size={20}/>
+            </button>
+            <button disabled={busy} onClick={onConfirm}
+              style={{...btn(GREEN,"#fff",busy),flex:1,height:52,fontSize:15,gap:8,boxShadow:"0 6px 18px rgba(47,125,50,0.35)"}}>
+              <IconCheck size={19} strokeWidth={2.6}/> {busy?"Cobrando…":`Cobrar ${$(amount)} · ${label}`}
+            </button>
+          </div>
+        );
         return (
-          <div onClick={e=>{if(e.target===e.currentTarget)closeModal()}}
-            style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
-            <div style={{...card,padding:20,width:"100%",maxWidth:480,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
-                <div>
-                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Caja</p>
-                  <p style={{fontSize:24,fontWeight:900,color:DARK}}>{payModalMesa}</p>
-                  <p style={{fontSize:13,fontWeight:600,color:MUTED,marginTop:2}}>{orders.length} pedido{orders.length>1?"s":""}</p>
-                </div>
-                <button onClick={closeModal}
-                  style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
-              </div>
+          <Sheet onClose={closeModal} maxWidth={500} eyebrow="Caja" title={payModalMesa}
+            subtitle={`${orders.length} pedido${orders.length>1?"s":""}${pendingOrders.length?` · ${pendingOrders.length} por cobrar`:" · todo cobrado"}`}>
 
-              <div style={{background:DARK,borderRadius:12,padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-                <span style={{fontSize:14,color:"rgba(255,255,255,0.5)",fontWeight:600}}>Total mesa</span>
-                <span style={{fontSize:24,fontWeight:900,color:GOLD}}>{$(total)}</span>
+              <div style={{background:DARK,borderRadius:14,padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+                <div>
+                  <span style={{fontSize:13,color:"rgba(255,255,255,0.55)",fontWeight:700,display:"block"}}>{pendingTotal>0?"Por cobrar":"Total mesa"}</span>
+                  {pendingTotal>0 && pendingTotal!==total && <span style={{fontSize:12,color:"rgba(255,255,255,0.4)",fontWeight:600}}>Total mesa {$(total)}</span>}
+                </div>
+                <span style={{fontSize:28,fontWeight:900,color:GOLD}}>{$(pendingTotal>0?pendingTotal:total)}</span>
               </div>
 
               {canReleaseTable && (
-                <div style={{background:tableReleaseSchemaReady?"rgba(47,125,50,0.10)":"#FFF6DD",border:`1.5px solid ${tableReleaseSchemaReady?GREEN:GOLD}`,borderRadius:12,padding:"12px 14px",marginBottom:16}}>
+                <div style={{background:tableReleaseSchemaReady?"rgba(47,125,50,0.10)":"#FFF6DD",border:`1.5px solid ${tableReleaseSchemaReady?GREEN:GOLD}`,borderRadius:14,padding:"12px 14px",marginBottom:16}}>
                   {tableReleaseSchemaReady ? (
                     <>
-                      <p style={{fontSize:13,fontWeight:800,color:GREEN,marginBottom:8}}>Todo está pagado y listo para entregar.</p>
+                      <p style={{fontSize:14,fontWeight:800,color:GREEN,marginBottom:8}}>Todo está pagado y listo para entregar.</p>
                       <button onClick={()=>askConfirm(`¿Liberar ${payModalMesa}? La mesa quedará disponible para un nuevo cliente.`,()=>releaseTable(payModalMesa))}
-                        style={{...btn(GREEN,"#fff"),width:"100%",height:44,fontSize:14}}>
+                        style={{...btn(GREEN,"#fff"),width:"100%",height:50,fontSize:15}}>
                         Liberar mesa
                       </button>
                     </>
@@ -3993,23 +4150,28 @@ export default function App() {
               )}
 
               {/* Cobrar toda la mesa: pago es independiente de preparación. */}
-              {pendingOrders.length>1 && !pendingOrders.some(o=>partiallyPaidOrders.has(o.id)) && (
+              {canPayWholeMesa && (
                 <div style={{marginBottom:18,paddingBottom:16,borderBottom:`1.5px dashed ${BORDER}`}}>
-                  <p style={{fontSize:13,fontWeight:700,color:DARK,marginBottom:10}}>Cobrar mesa completa — ¿con qué método?</p>
-                  <div style={{display:"flex",gap:8,flexWrap:"wrap" as const}}>
-                    {(["efectivo","tarjeta","transferencia"] as const).map(m=>(
-                      <button key={m} onClick={()=>payWholeMesa(pendingOrders, m)}
-                        style={{...btn(methodBg[m],methodFg[m]),flex:1,minWidth:100,height:48,fontSize:13}}>
-                        {methodLabels[m]}
-                      </button>
-                    ))}
+                  <p style={{fontSize:14,fontWeight:800,color:DARK,marginBottom:10}}>Cobrar mesa completa · {$(pendingTotal)}</p>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8}}>
+                    {(["efectivo","tarjeta","transferencia"] as const).map(m=>{
+                      const sel = chargeIntent?.target==="__mesa__" && chargeIntent.method===m;
+                      return (
+                        <button key={m} onClick={()=>pickMethod("__mesa__", m)} className={`cb-method${sel?" is-selected":""}`}
+                          style={{...btn(methodBg[m],methodFg[m]),padding:"0 6px",minWidth:0,height:50,fontSize:13,color:methodFg[m],opacity:chargeIntent?.target==="__mesa__"&&!sel?0.45:1}}>
+                          {methodLabels[m]}
+                        </button>
+                      );
+                    })}
                   </div>
-                  <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:8}}>Para dividir entre métodos, o cobrar cada uno por separado, usá los pedidos de abajo.</p>
+                  {chargeIntent?.target==="__mesa__" && confirmBtn(methodLabels[chargeIntent.method], pendingTotal,
+                    ()=>{ const m=chargeIntent.method; setChargeIntent(null); payWholeMesa(pendingOrders, m); })}
+                  <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:8}}>Para dividir entre métodos o cobrar a cada uno por separado, usa los pedidos de abajo.</p>
                 </div>
               )}
 
               {/* Un card por pedido */}
-              <div style={{display:"flex",flexDirection:"column" as const,gap:10}}>
+              <div style={{display:"flex",flexDirection:"column" as const,gap:12}}>
                 {orders.map(o=>{
                   const isListo = o.status==="listo";
                   const busy = paying===o.id;
@@ -4017,31 +4179,32 @@ export default function App() {
                   const canPay = paymentSchemaReady && o.payment_status==="pending" && !hasPartial;
                   const canPayPerPerson = paymentSchemaReady && o.payment_status==="pending";
                   const expanded = expandedOrder===o.id;
+                  const isPaid = o.payment_status==="paid";
                   return (
-                    <div key={o.id} style={{background:CREAM,borderRadius:12,padding:"12px 14px"}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,marginBottom:8}}>
-                        <div>
-                          <p style={{fontSize:14,fontWeight:900,color:DARK}}>#{o.order_number}{o.customer_name?` · ${o.customer_name}`:""}</p>
+                    <div key={o.id} style={{background:isPaid?"rgba(47,125,50,0.07)":CREAM,borderRadius:14,padding:"12px 14px",border:`1px solid ${isPaid?"rgba(47,125,50,0.3)":"transparent"}`}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,marginBottom:10}}>
+                        <div style={{minWidth:0}}>
+                          <p style={{fontSize:15,fontWeight:900,color:DARK,marginBottom:4}}>#{o.order_number}{o.customer_name?` · ${o.customer_name}`:""}</p>
                           <span style={badge(o.status)}>{o.payment_status==="paid" ? (o.status==="listo" ? "Pagado · listo para entregar" : "Pagado · en preparación") : (o.status==="listo" ? "Pendiente · listo para entregar" : "Pendiente · en preparación")}</span>
                         </div>
-                        <div style={{display:"flex",flexDirection:"column" as const,alignItems:"flex-end",gap:6}}>
-                          <span style={{fontSize:16,fontWeight:900,color:RED}}>{$(o.total)}</span>
-                          <button onClick={()=>setExpandedOrder(expanded?null:o.id)}
-                            style={{fontSize:11,fontWeight:700,color:MUTED,background:"#fff",border:`1px solid ${BORDER}`,borderRadius:8,padding:"4px 8px",cursor:"pointer",fontFamily:FONT}}>
+                        <div style={{display:"flex",flexDirection:"column" as const,alignItems:"flex-end",gap:6,flexShrink:0}}>
+                          <span style={{fontSize:18,fontWeight:900,color:isPaid?GREEN:RED}}>{$(o.total)}</span>
+                          <button onClick={()=>setExpandedOrder(expanded?null:o.id)} aria-expanded={expanded}
+                            style={{fontSize:12,fontWeight:800,color:DARK,background:"#fff",border:`1px solid ${BORDER}`,borderRadius:10,padding:"0 10px",height:34,cursor:"pointer",fontFamily:FONT}}>
                             {expanded?"Ocultar ▲":`${(o.order_items||[]).length} items ▼`}
                           </button>
                         </div>
                       </div>
 
                       {expanded && (
-                        <div style={{background:"#fff",borderRadius:8,padding:"8px 10px",marginBottom:10,display:"flex",flexDirection:"column" as const,gap:4}}>
+                        <div style={{background:"#fff",borderRadius:10,padding:"8px 12px",marginBottom:10,display:"flex",flexDirection:"column" as const,gap:5}}>
                           {(o.order_items||[]).map(i=>(
                             <div key={i.id}>
-                              <div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:700,color:DARK}}>
+                              <div style={{display:"flex",justifyContent:"space-between",fontSize:14,fontWeight:700,color:DARK}}>
                                 <span>{i.quantity}× {i.product_name}</span>
                                 <span>{$(i.quantity*i.unit_price)}</span>
                               </div>
-                              {i.notes && <p style={{fontSize:11,fontWeight:600,color:MUTED}}>Nota: {i.notes}</p>}
+                              {i.notes && <p style={{fontSize:12,fontWeight:600,color:MUTED}}>Nota: {i.notes}</p>}
                             </div>
                           ))}
                           {(o.order_items||[]).length===0 && <p style={{fontSize:12,color:MUTED,fontWeight:600}}>Sin detalle de items</p>}
@@ -4049,129 +4212,125 @@ export default function App() {
                       )}
 
                       {!paymentSchemaReady && <p style={{fontSize:12,color:ALERT_RED,fontWeight:700,marginBottom:8,background:"#fff",borderRadius:8,padding:"6px 10px"}}>Vista previa segura: no se puede cobrar hasta aplicar Fase 12</p>}
-                      {paymentSchemaReady && !isListo && <p style={{fontSize:12,color:MUTED,fontWeight:600,marginBottom:8,background:"#fff",borderRadius:8,padding:"6px 10px"}}>Preparación en curso — el cobro ya se puede registrar.</p>}
-                      {paymentSchemaReady && hasPartial && <p style={{fontSize:12,color:"#8A6210",fontWeight:700,marginBottom:8,background:"#FFF6DD",borderRadius:8,padding:"6px 10px"}}>Ya tiene cobros parciales por persona — seguí cobrando con &quot;Por persona&quot; hasta cubrir todo.</p>}
-                      <p style={{fontSize:11,fontWeight:800,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:7}}>Método de pago</p>
-                      <div className="payment-method-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:7,marginBottom:9}}>
-                        {(["efectivo","tarjeta","transferencia"] as const).map(m=>(
-                          <button key={m} disabled={!canPay||busy} onClick={()=>cobrar(o.id,m,o.total)}
-                            style={{...btn(methodBg[m],methodFg[m],!canPay||busy),padding:"0 8px",minWidth:0,height:44,fontSize:12}}>
-                            {busy?"…":methodLabels[m]}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="order-service-actions" style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:7}}>
-                        <button disabled={!canPay||busy} onClick={()=>{setSplitModal(o);setSplitAmounts({efectivo:"",tarjeta:"",transferencia:""});}}
-                          style={{...btn(CREAM2,DARK,!canPay||busy),padding:"0 8px",minWidth:0,height:40,fontSize:11,border:`1px solid ${BORDER}`}}>
-                          Dividir pago
+                      {paymentSchemaReady && !isPaid && !isListo && <p style={{fontSize:12,color:MUTED,fontWeight:600,marginBottom:8}}>Preparación en curso — el cobro ya se puede registrar.</p>}
+                      {paymentSchemaReady && hasPartial && !isPaid && <p style={{fontSize:12,color:"#8A6210",fontWeight:700,marginBottom:8,background:"#FFF6DD",borderRadius:8,padding:"6px 10px"}}>Ya tiene cobros parciales por persona — sigue cobrando con &quot;Por consumo&quot; hasta cubrir todo.</p>}
+
+                      {isPaid ? (
+                        <p style={{display:"flex",alignItems:"center",gap:6,fontSize:14,fontWeight:800,color:GREEN,marginBottom:9}}><IconCheck size={18} strokeWidth={2.6}/> Cobrado</p>
+                      ) : (
+                        <>
+                          <p style={{fontSize:11,fontWeight:800,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:7}}>Método de pago</p>
+                          <div className="payment-method-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:7}}>
+                            {(["efectivo","tarjeta","transferencia"] as const).map(m=>{
+                              const sel = chargeIntent?.target===o.id && chargeIntent.method===m;
+                              return (
+                                <button key={m} disabled={!canPay||busy} onClick={()=>pickMethod(o.id, m)} className={`cb-method${sel?" is-selected":""}`}
+                                  style={{...btn(methodBg[m],methodFg[m],!canPay||busy),padding:"0 6px",minWidth:0,height:48,fontSize:13,color:!canPay||busy?"#B09080":methodFg[m],
+                                    opacity:chargeIntent?.target===o.id&&!sel?0.45:1}}>
+                                  {methodLabels[m]}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {chargeIntent?.target===o.id && confirmBtn(methodLabels[chargeIntent.method], o.total,
+                            ()=>{ const m=chargeIntent.method; setChargeIntent(null); cobrar(o.id,m,o.total); }, busy)}
+                        </>
+                      )}
+                      <div className="order-service-actions" style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:7,marginTop:9}}>
+                        <button disabled={!canPay||busy} onClick={()=>{setChargeIntent(null);setSplitModal(o);setSplitAmounts({efectivo:"",tarjeta:"",transferencia:""});}}
+                          style={{...btn("#fff",DARK,!canPay||busy),padding:"0 6px",minWidth:0,height:44,fontSize:13,gap:5,whiteSpace:"nowrap" as const,border:`1px solid ${BORDER}`}}>
+                          <IconSplit size={15}/> Dividir
                         </button>
-                        <button disabled={!canPayPerPerson||busy} onClick={()=>openItemPayModal(o)}
-                          style={{...btn(CREAM2,DARK,!canPayPerPerson||busy),padding:"0 8px",minWidth:0,height:40,fontSize:11,border:`1px solid ${BORDER}`}}>
-                          Por consumo
+                        <button disabled={!canPayPerPerson||busy} onClick={()=>{setChargeIntent(null);openItemPayModal(o);}}
+                          style={{...btn("#fff",DARK,!canPayPerPerson||busy),padding:"0 6px",minWidth:0,height:44,fontSize:13,gap:5,whiteSpace:"nowrap" as const,border:`1px solid ${BORDER}`}}>
+                          <IconUsers size={15}/> Consumo
                         </button>
-                        <button disabled={busy} onClick={()=>setMoveOrder(o)}
-                          style={{...btn(CREAM2,DARK,busy),padding:"0 8px",minWidth:0,height:40,fontSize:11,border:`1px solid ${BORDER}`}}>
-                          Mover
+                        <button disabled={busy} onClick={()=>{setChargeIntent(null);setMoveOrder(o);}}
+                          style={{...btn("#fff",DARK,busy),padding:"0 6px",minWidth:0,height:44,fontSize:13,gap:5,whiteSpace:"nowrap" as const,border:`1px solid ${BORDER}`}}>
+                          <IconMove size={15}/> Mover
                         </button>
                       </div>
                     </div>
                   );
                 })}
               </div>
-            </div>
-          </div>
+          </Sheet>
         );
       })()}
 
       {/* ── MODAL MOVER PEDIDO ──────────────────────────────────── */}
       {moveOrder && (
-        <div onClick={e=>{if(e.target===e.currentTarget)setMoveOrder(null)}}
-          style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
-          <div style={{...card,padding:20,width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
-              <div>
-                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Mover pedido</p>
-                <p style={{fontSize:20,fontWeight:900,color:DARK}}>#{moveOrder.order_number}{moveOrder.customer_name?` · ${moveOrder.customer_name}`:""} — {moveOrder.table_label}</p>
-              </div>
-              <button onClick={()=>setMoveOrder(null)}
-                style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
+        <Sheet onClose={()=>setMoveOrder(null)} maxWidth={460} eyebrow="Mover pedido"
+          title={`#${moveOrder.order_number}${moveOrder.customer_name?` · ${moveOrder.customer_name}`:""}`}
+          subtitle={`Ahora en ${moveOrder.table_label} — ¿a qué mesa lo movemos?`}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:8}}>
+              {mesasList.filter(m=>m!==moveOrder.table_label).map(m=>{
+                const busyMesa = mesaOrdersOf(cOrders.length?cOrders:wOrders, m).length>0;
+                return (
+                  <button key={m} onClick={()=>doMoveOrder(moveOrder, m)}
+                    style={{padding:"12px 10px",minHeight:58,borderRadius:12,fontSize:15,fontWeight:800,fontFamily:FONT,cursor:"pointer",textAlign:"left" as const,
+                      background:busyMesa?"#fff":CREAM,border:`1.5px solid ${busyMesa?GOLD:BORDER}`,color:DARK,display:"flex",flexDirection:"column" as const,gap:2}}>
+                    {m}
+                    <span style={{fontSize:11,fontWeight:800,color:busyMesa?"#8A6210":MUTED}}>{busyMesa?"Ocupada":"Libre"}</span>
+                  </button>
+                );
+              })}
             </div>
-            <p style={{fontSize:13,fontWeight:600,color:MUTED,marginBottom:12}}>¿A qué mesa lo movemos?</p>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:8}}>
-              {mesasList.filter(m=>m!==moveOrder.table_label).map(m=>(
-                <button key={m} onClick={()=>doMoveOrder(moveOrder, m)}
-                  style={{padding:"14px 8px",borderRadius:10,fontSize:14,fontWeight:800,fontFamily:FONT,cursor:"pointer",
-                    background:CREAM,border:`1.5px solid ${BORDER}`,color:DARK}}>
-                  {m}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
+        </Sheet>
       )}
 
       {/* ── MODAL PAGO DIVIDIDO ─────────────────────────────────── */}
-      {splitModal && (
-        <div onClick={e=>{if(e.target===e.currentTarget)setSplitModal(null)}}
-          style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
-          <div style={{...card,padding:20,width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
-              <div>
-                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Pago dividido</p>
-                <p style={{fontSize:22,fontWeight:900,color:DARK}}>{splitModal.table_label}</p>
-                <p style={{fontSize:14,fontWeight:700,color:RED,marginTop:4}}>Total: {$(splitModal.total)}</p>
-              </div>
-              <button onClick={()=>setSplitModal(null)}
-                style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
-            </div>
-
-            <p style={{fontSize:13,fontWeight:600,color:MUTED,marginBottom:12}}>Ingresa cuánto paga con cada método. La suma debe ser igual al total.</p>
-
+      {splitModal && (()=>{
+        const labels={efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia"};
+        const bgs={efectivo:DARK,tarjeta:RED,transferencia:GOLD};
+        const fgs={efectivo:"#fff",tarjeta:"#fff",transferencia:DARK};
+        const sum=["efectivo","tarjeta","transferencia"].reduce((s,m)=>s+(parseFloat(splitAmounts[m as keyof typeof splitAmounts])||0),0);
+        const diff=Math.round((splitModal.total-sum)*100)/100;
+        const ok=Math.abs(diff)<0.01;
+        return (
+          <Sheet onClose={()=>setSplitModal(null)} maxWidth={460} eyebrow="Pago dividido"
+            title={`${splitModal.table_label} · ${$(splitModal.total)}`}
+            subtitle="Escribe cuánto paga con cada método. «Resto» completa lo que falta."
+            footer={
+              <>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:ok?GREEN:diff<0?"#FFEBEE":CREAM2,borderRadius:12,padding:"10px 14px",marginBottom:10}}>
+                  <span style={{fontSize:14,fontWeight:800,color:ok?"#fff":diff<0?ALERT_RED:MUTED}}>
+                    {ok?"Suma correcta":diff>0?`Faltan ${$(diff)}`:`Excede ${$(-diff)}`}
+                  </span>
+                  <span style={{fontSize:15,fontWeight:900,color:ok?"#fff":DARK}}>{$(sum)} / {$(splitModal.total)}</span>
+                </div>
+                <button disabled={!ok||paying===splitModal.id}
+                  onClick={()=>{
+                    const parts=(["efectivo","tarjeta","transferencia"] as const)
+                      .map(m=>({method:m,amount:parseFloat(splitAmounts[m])||0}))
+                      .filter(p=>p.amount>0);
+                    cobrarSplit(splitModal,parts);
+                  }}
+                  style={{...btn(RED,"#fff",!ok||paying===splitModal.id),width:"100%",height:54,fontSize:16}}>
+                  {paying===splitModal.id?"Guardando…":"Confirmar pago dividido"}
+                </button>
+              </>
+            }>
             {(["efectivo","tarjeta","transferencia"] as const).map(m=>{
-              const labels={efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia"};
-              const bgs={efectivo:DARK,tarjeta:RED,transferencia:GOLD};
-              const fgs={efectivo:"#fff",tarjeta:"#fff",transferencia:DARK};
+              const others = (["efectivo","tarjeta","transferencia"] as const).filter(x=>x!==m).reduce((s,x)=>s+(parseFloat(splitAmounts[x])||0),0);
+              const rest = Math.max(0, Math.round((splitModal.total-others)*100)/100);
               return (
-                <div key={m} style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
-                  <div style={{background:bgs[m],borderRadius:8,padding:"6px 12px",minWidth:110}}>
-                    <span style={{fontSize:13,fontWeight:700,color:fgs[m]}}>{labels[m]}</span>
+                <div key={m} style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                  <div style={{background:bgs[m],borderRadius:10,padding:"0 12px",height:48,display:"flex",alignItems:"center",minWidth:112}}>
+                    <span style={{fontSize:14,fontWeight:800,color:fgs[m]}}>{labels[m]}</span>
                   </div>
-                  <input type="number" min="0" step="0.01" placeholder="0.00"
+                  <input type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" aria-label={`Monto en ${labels[m]}`}
                     value={splitAmounts[m]}
                     onChange={e=>setSplitAmounts(p=>({...p,[m]:e.target.value}))}
-                    style={{flex:1,height:44,borderRadius:10,border:`1px solid ${BORDER}`,padding:"0 12px",fontSize:16,fontWeight:700,fontFamily:FONT,color:DARK,background:"#fff"}}/>
+                    style={{flex:1,minWidth:0,height:48,borderRadius:10,border:`1.5px solid ${BORDER}`,padding:"0 12px",fontSize:17,fontWeight:800,fontFamily:FONT,color:DARK,background:"#fff"}}/>
+                  <button onClick={()=>setSplitAmounts(p=>({...p,[m]:rest?rest.toFixed(2):""}))} disabled={!rest}
+                    style={{...btn(CREAM2,DARK,!rest),height:48,padding:"0 10px",fontSize:12,minHeight:48}}>Resto</button>
                 </div>
               );
             })}
-
-            {(()=>{
-              const sum=["efectivo","tarjeta","transferencia"].reduce((s,m)=>s+(parseFloat(splitAmounts[m as keyof typeof splitAmounts])||0),0);
-              const diff=Math.round((splitModal.total-sum)*100)/100;
-              const ok=Math.abs(diff)<0.01;
-              return (
-                <>
-                  <div style={{display:"flex",justifyContent:"space-between",background:ok?GREEN:CREAM2,borderRadius:10,padding:"10px 14px",marginTop:6,marginBottom:14}}>
-                    <span style={{fontSize:13,fontWeight:700,color:ok?"#fff":MUTED}}>
-                      {ok?"Suma correcta":diff>0?`Faltan ${$(diff)}`:`Excede ${$(-diff)}`}
-                    </span>
-                    <span style={{fontSize:15,fontWeight:900,color:ok?"#fff":DARK}}>{$(sum)} / {$(splitModal.total)}</span>
-                  </div>
-                  <button disabled={!ok||paying===splitModal.id}
-                    onClick={()=>{
-                      const parts=(["efectivo","tarjeta","transferencia"] as const)
-                        .map(m=>({method:m,amount:parseFloat(splitAmounts[m])||0}))
-                        .filter(p=>p.amount>0);
-                      cobrarSplit(splitModal,parts);
-                    }}
-                    style={{...btn(RED,"#fff",!ok||paying===splitModal.id),width:"100%",height:54,fontSize:16}}>
-                    {paying===splitModal.id?"Guardando…":"Confirmar pago dividido"}
-                  </button>
-                </>
-              );
-            })()}
-          </div>
-        </div>
-      )}
+          </Sheet>
+        );
+      })()}
 
       {/* ── MODAL PAGO POR CONSUMO/PERSONA ──────────────────────── */}
       {itemPayModal && (()=>{
@@ -4182,147 +4341,138 @@ export default function App() {
         const subtotal = items.reduce((s,i)=>s+(parseFloat(itemPayAlloc[i.id])||0)*i.unit_price,0);
         const anyPending = items.some(i=>(itemPayPending[i.id]?.pending ?? i.quantity) > 0.0001);
         const closeModal = () => setItemPayModal(null);
+        const setAlloc = (id: string, v: number, max: number) => {
+          haptic();
+          const q = Math.max(0, Math.min(max, v));
+          setItemPayAlloc(prev=>({...prev,[id]:q?String(q):""}));
+        };
         return (
-          <div onClick={e=>{if(e.target===e.currentTarget)closeModal()}}
-            style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
-            <div style={{...card,padding:20,width:"100%",maxWidth:480,maxHeight:"90vh",overflowY:"auto" as const,animation:"fadeUp .25s ease both"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
-                <div>
-                  <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Pago por consumo</p>
-                  <p style={{fontSize:20,fontWeight:900,color:DARK}}>#{itemPayModal.order_number} · {itemPayModal.table_label}</p>
-                </div>
-                <button onClick={closeModal}
-                  style={{background:CREAM2,border:"none",borderRadius:10,width:36,height:36,fontWeight:900,fontSize:18,cursor:"pointer",color:DARK,fontFamily:FONT}}>×</button>
-              </div>
+          <Sheet onClose={closeModal} maxWidth={480} eyebrow="Pago por consumo"
+            title={`#${itemPayModal.order_number} · ${itemPayModal.table_label}`}
+            subtitle={anyPending ? "Marca lo que consumió esta persona y con qué paga. Repite hasta cubrir todo." : undefined}
+            footer={anyPending ? (
+              <>
+                {itemPayError && <p style={{fontSize:13,fontWeight:800,color:ALERT_RED,marginBottom:8}}>{itemPayError}</p>}
+                <button disabled={itemPaySaving||subtotal<=0} onClick={submitItemPayment}
+                  style={{...btn(RED,"#fff",itemPaySaving||subtotal<=0),width:"100%",height:54,fontSize:16}}>
+                  {itemPaySaving?"Guardando…":subtotal>0?`Registrar pago · ${$(subtotal)} · ${methodLabels[itemPayMethod]}`:"Elige productos"}
+                </button>
+              </>
+            ) : undefined}>
 
               {!anyPending ? (
-                <div style={{background:"rgba(47,125,50,0.1)",border:`1.5px solid ${GREEN}`,borderRadius:10,padding:"14px 16px"}}>
-                  <p style={{fontSize:14,fontWeight:800,color:GREEN}}>Todo el pedido está cobrado</p>
+                <div style={{background:"rgba(47,125,50,0.1)",border:`1.5px solid ${GREEN}`,borderRadius:12,padding:"14px 16px"}}>
+                  <p style={{fontSize:15,fontWeight:800,color:GREEN}}>Todo el pedido está cobrado</p>
                 </div>
               ) : (
                 <>
-                  <p style={{fontSize:13,fontWeight:600,color:MUTED,marginBottom:10}}>Elegí qué consumió esta persona y con qué método paga. Podés repetir esto varias veces hasta cubrir todo el pedido.</p>
-
                   <div style={{display:"flex",flexDirection:"column" as const,gap:8,marginBottom:14}}>
                     {items.map(i=>{
                       const p = itemPayPending[i.id] || {product_name:i.product_name, quantity:i.quantity, paid:0, pending:i.quantity};
                       if (p.pending<=0.0001) return (
-                        <div key={i.id} style={{display:"flex",justifyContent:"space-between",padding:"8px 10px",background:CREAM,borderRadius:8,opacity:0.5}}>
-                          <span style={{fontSize:13,fontWeight:700,color:DARK}}>{i.product_name}</span>
-                          <span style={{fontSize:12,fontWeight:700,color:GREEN}}>Cobrado</span>
+                        <div key={i.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",background:CREAM,borderRadius:10,opacity:0.55}}>
+                          <span style={{fontSize:14,fontWeight:700,color:DARK}}>{i.product_name}</span>
+                          <span style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:12,fontWeight:800,color:GREEN}}><IconCheck size={15}/> Cobrado</span>
                         </div>
                       );
+                      const q = parseFloat(itemPayAlloc[i.id])||0;
                       return (
-                        <div key={i.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",background:CREAM,borderRadius:8}}>
+                        <div key={i.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:q>0?"#fff":CREAM,borderRadius:12,border:`1.5px solid ${q>0?RED:"transparent"}`}}>
                           <div style={{flex:1,minWidth:0}}>
-                            <p style={{fontSize:13,fontWeight:700,color:DARK}}>{i.product_name}</p>
-                            <p style={{fontSize:11,fontWeight:600,color:MUTED}}>Pendiente: {p.pending} de {p.quantity} · {$(i.unit_price)} c/u</p>
+                            <p style={{fontSize:14,fontWeight:800,color:DARK}}>{i.product_name}</p>
+                            <p style={{fontSize:12,fontWeight:600,color:MUTED}}>Falta {p.pending} de {p.quantity} · {$(i.unit_price)} c/u</p>
                           </div>
-                          <input type="number" min="0" max={p.pending} step="1" placeholder="0"
-                            value={itemPayAlloc[i.id]||""}
-                            onChange={e=>setItemPayAlloc(prev=>({...prev,[i.id]:e.target.value}))}
-                            style={{width:64,height:40,borderRadius:8,border:`1px solid ${BORDER}`,padding:"0 8px",fontSize:14,fontWeight:700,fontFamily:FONT,color:DARK,background:"#fff",textAlign:"center" as const}}/>
+                          <div style={{display:"flex",alignItems:"center",height:44,borderRadius:12,overflow:"hidden",border:`1.5px solid ${q>0?RED:BORDER}`,background:"#fff",flexShrink:0}}>
+                            <button aria-label={`Quitar ${i.product_name}`} onClick={()=>setAlloc(i.id,q-1,p.pending)} disabled={q<=0}
+                              style={{width:42,height:"100%",background:"transparent",color:q>0?RED:"#C9B99F",border:"none",display:"flex",alignItems:"center",justifyContent:"center"}}><IconMinus size={18} strokeWidth={2.6}/></button>
+                            <span style={{minWidth:26,textAlign:"center" as const,fontSize:16,fontWeight:900,color:DARK}}>{q}</span>
+                            <button aria-label={`Agregar ${i.product_name}`} onClick={()=>setAlloc(i.id,q+1,p.pending)} disabled={q>=p.pending}
+                              style={{width:42,height:"100%",background:q>=p.pending?"#E8D8C4":RED,color:"#fff",border:"none",display:"flex",alignItems:"center",justifyContent:"center"}}><IconPlus size={18} strokeWidth={2.6}/></button>
+                          </div>
                         </div>
                       );
                     })}
                   </div>
 
                   <input placeholder="Nombre de la persona (opcional)" value={itemPayPerson} onChange={e=>setItemPayPerson(e.target.value)}
-                    style={{width:"100%",height:44,borderRadius:10,border:`1px solid ${BORDER}`,padding:"0 14px",fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:12}}/>
+                    style={{width:"100%",height:48,borderRadius:12,border:`1.5px solid ${BORDER}`,padding:"0 14px",fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:12}}/>
 
-                  <p style={{fontSize:12,fontWeight:700,color:MUTED,marginBottom:8,textTransform:"uppercase" as const,letterSpacing:"0.06em"}}>Método de pago</p>
-                  <div style={{display:"flex",gap:8,marginBottom:14}}>
+                  <p style={{fontSize:12,fontWeight:800,color:MUTED,marginBottom:8,textTransform:"uppercase" as const,letterSpacing:"0.06em"}}>Método de pago</p>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8}}>
                     {(["efectivo","tarjeta","transferencia"] as const).map(m=>(
-                      <button key={m} onClick={()=>setItemPayMethod(m)}
-                        style={{...btn(itemPayMethod===m?methodBg[m]:CREAM2,itemPayMethod===m?methodFg[m]:DARK),flex:1,height:44,fontSize:13,
-                          border:itemPayMethod===m?"none":`1px solid ${BORDER}`}}>
+                      <button key={m} onClick={()=>{haptic();setItemPayMethod(m);}} aria-pressed={itemPayMethod===m}
+                        style={{...btn(itemPayMethod===m?methodBg[m]:"#fff",itemPayMethod===m?methodFg[m]:DARK),padding:"0 6px",minWidth:0,height:48,fontSize:13,
+                          border:itemPayMethod===m?"none":`1.5px solid ${BORDER}`}}>
                         {methodLabels[m]}
                       </button>
                     ))}
                   </div>
-
-                  <div style={{display:"flex",justifyContent:"space-between",background:DARK,borderRadius:10,padding:"12px 14px",marginBottom:12}}>
-                    <span style={{fontSize:13,color:"rgba(255,255,255,0.5)",fontWeight:600}}>Subtotal seleccionado</span>
-                    <span style={{fontSize:18,fontWeight:900,color:GOLD}}>{$(subtotal)}</span>
-                  </div>
-
-                  {itemPayError && <p style={{fontSize:12,fontWeight:700,color:ALERT_RED,marginBottom:10}}>{itemPayError}</p>}
-
-                  <button disabled={itemPaySaving||subtotal<=0} onClick={submitItemPayment}
-                    style={{...btn(RED,"#fff",itemPaySaving||subtotal<=0),width:"100%",height:54,fontSize:16}}>
-                    {itemPaySaving?"Guardando…":"Registrar pago"}
-                  </button>
                 </>
               )}
-            </div>
-          </div>
+          </Sheet>
         );
       })()}
 
       {modal && (
-        <div onClick={e=>{if(e.target===e.currentTarget)setModal(false)}}
-          style={{position:"fixed" as const,inset:0,background:"rgba(23,18,15,0.65)",backdropFilter:"blur(6px)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:12}}>
-          <div style={{...card,padding:20,width:"100%",maxWidth:480,maxHeight:"90vh",overflowY:"auto",animation:"fadeUp .25s ease both"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
-              <div>
-                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",marginBottom:4}}>Confirmar pedido</p>
-                <p style={{fontSize:24,fontWeight:900,color:DARK}}>{mesa}</p>
+        <Sheet onClose={()=>setModal(false)} maxWidth={480} eyebrow="Confirmar pedido" title={mesa}
+          subtitle={`${cartCount} producto${cartCount===1?"":"s"}`}
+          footer={
+            <>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
+                <span style={{fontSize:14,color:MUTED,fontWeight:800}}>Total</span>
+                <span style={{fontSize:26,fontWeight:900,color:DARK}}>{$(cartTotal)}</span>
               </div>
-              <button onClick={()=>setModal(false)} style={{width:40,height:40,borderRadius:99,background:CREAM2,fontSize:18,fontWeight:900,color:DARK,border:"none",cursor:"pointer",fontFamily:FONT}}>×</button>
-            </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1.8fr",gap:10}}>
+                <button onClick={()=>setModal(false)} style={{...btn(CREAM2,DARK),height:54,padding:"0 10px",whiteSpace:"nowrap" as const}}>Agregar más</button>
+                <button disabled={sending||!customerName.trim()||cartItems.length===0} onClick={sendToKitchen}
+                  style={{...btn(RED,"#fff",sending||!customerName.trim()||cartItems.length===0),height:54,fontSize:16,fontWeight:900}}>
+                  {sending?"Enviando…":!customerName.trim()?"Falta el nombre":"Enviar pedido"}
+                </button>
+              </div>
+            </>
+          }>
+            <label style={{display:"block",fontSize:12,fontWeight:800,color:customerName.trim()?MUTED:RED,textTransform:"uppercase" as const,letterSpacing:"0.06em",marginBottom:6}}>
+              Nombre del cliente {customerName.trim()?"":"· obligatorio"}
+            </label>
+            <input type="text" placeholder="Ej: Ana" autoComplete="off" enterKeyHint="done"
+              value={customerName} onChange={e=>{setCustomerName(e.target.value);setCustomerNameEdited(true);}}
+              style={{width:"100%",height:50,padding:"0 14px",borderRadius:12,border:`1.5px solid ${customerName.trim()?BORDER:RED}`,
+                fontSize:16,fontWeight:700,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:14}}/>
 
-            <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:14}}>
+            <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
               {cartItems.map(i=>{
                 const allNotes = [...i.notes, i.customNote].filter(Boolean).join(", ");
                 return (
-                  <div key={i.id} style={{background:CREAM,borderRadius:10,padding:"10px 14px"}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-                      <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
-                        <span style={{background:RED,color:"#fff",width:22,height:22,borderRadius:"50%",fontSize:12,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{i.qty}</span>
-                        <span style={{fontSize:14,fontWeight:700,color:DARK}}>{i.name}</span>
+                  <div key={i.id} style={{background:CREAM,borderRadius:12,padding:"10px 12px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+                      <div style={{minWidth:0,flex:1}}>
+                        <p style={{fontSize:15,fontWeight:800,color:DARK,lineHeight:1.25}}>{i.name}</p>
+                        <p style={{fontSize:13,fontWeight:900,color:RED}}>{$(i.qty*i.price)}</p>
                       </div>
-                      <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
-                        <span style={{fontSize:14,fontWeight:900,color:RED}}>{$(i.qty*i.price)}</span>
-                        <button onClick={()=>removeCartItem(i.id)} title="Quitar del pedido"
-                          style={{width:26,height:26,borderRadius:8,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED,fontWeight:900,fontSize:14,fontFamily:FONT,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                          ×
+                      <div style={{display:"flex",alignItems:"center",height:42,borderRadius:12,overflow:"hidden",border:`1.5px solid ${RED}`,background:"#fff",flexShrink:0}}>
+                        <button aria-label={i.qty===1?`Quitar ${i.name}`:`Uno menos de ${i.name}`} onClick={()=>{haptic();i.qty===1?removeCartItem(i.id):changeQty(i.id,-1);}}
+                          style={{width:42,height:"100%",background:"transparent",color:RED,border:"none",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                          {i.qty===1?<IconTrash size={17}/>:<IconMinus size={18} strokeWidth={2.6}/>}
+                        </button>
+                        <span style={{minWidth:26,textAlign:"center" as const,fontSize:16,fontWeight:900,color:DARK}}>{i.qty}</span>
+                        <button aria-label={`Uno más de ${i.name}`} onClick={()=>{haptic();changeQty(i.id,1);}}
+                          style={{width:42,height:"100%",background:RED,color:"#fff",border:"none",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                          <IconPlus size={18} strokeWidth={2.6}/>
                         </button>
                       </div>
                     </div>
-                    {allNotes && <p style={{fontSize:12,fontWeight:600,color:MUTED,marginTop:4,paddingLeft:30}}>Nota: {allNotes}</p>}
+                    {allNotes && <p style={{fontSize:12,fontWeight:700,color:MUTED,marginTop:6}}>Nota: {allNotes}</p>}
                   </div>
                 );
               })}
-              {cartItems.length===0 && <p style={{fontSize:13,color:MUTED,fontWeight:600,textAlign:"center" as const,padding:"10px 0"}}>Sin productos — agregá algo o cerrá esta ventana</p>}
+              {cartItems.length===0 && <p style={{fontSize:14,color:MUTED,fontWeight:700,textAlign:"center" as const,padding:"10px 0"}}>Sin productos — agrega algo o cierra esta ventana</p>}
             </div>
 
-            <div style={{background:DARK,borderRadius:12,padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-              <span style={{fontSize:14,color:"rgba(255,255,255,0.5)",fontWeight:600}}>Total a cobrar</span>
-              <span style={{fontSize:24,fontWeight:900,color:GOLD}}>{$(cartTotal)}</span>
-            </div>
-
-            <input type="text" placeholder="Nombre del cliente (obligatorio) — ej: Ana"
-              value={customerName} onChange={e=>{setCustomerName(e.target.value);setCustomerNameEdited(true);}}
-              style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${customerName.trim()?BORDER:RED}`,
-                fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none",marginBottom:!customerName.trim()?4:10}}/>
-            {!customerName.trim() && (
-              <p style={{fontSize:12,fontWeight:700,color:RED,marginBottom:8}}>Anotá el nombre del cliente para poder enviar el pedido</p>
-            )}
-
-            <input type="text" placeholder="Nota de mesa (opcional) — ej: alérgico al gluten, misma cuenta…"
+            <input type="text" placeholder="Nota de mesa (opcional) — ej: alérgico al gluten"
               value={tableNote} onChange={e=>setTableNote(e.target.value)}
-              style={{width:"100%",padding:"11px 14px",borderRadius:10,border:`1.5px solid ${BORDER}`,
-                fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:CARD,outline:"none",marginBottom:12}}/>
-
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1.6fr",gap:10}}>
-              <button onClick={()=>setModal(false)} style={{...btn(CREAM2,DARK),height:52}}>Editar</button>
-              <button disabled={sending||!customerName.trim()||cartItems.length===0} onClick={sendToKitchen}
-                style={{...btn(RED,"#fff",sending||!customerName.trim()||cartItems.length===0),height:52,fontSize:16,fontWeight:800}}>
-                {sending?"Enviando…":"Enviar pedido"}
-              </button>
-            </div>
-          </div>
-        </div>
+              style={{width:"100%",height:48,padding:"0 14px",borderRadius:12,border:`1.5px solid ${BORDER}`,
+                fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+        </Sheet>
       )}
     </div>
   );

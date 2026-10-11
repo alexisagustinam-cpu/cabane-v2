@@ -116,7 +116,7 @@ export default function MenuClient({ categories, products }: { categories: Categ
               style={{ marginTop: 48, width: 260, height: 58, borderRadius: 29, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(181,137,74,0.3)", position: "relative", cursor: "pointer", overflow: "hidden" }}
             >
               <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ color: "rgba(232,213,183,0.7)", fontSize: 13, fontWeight: 700, letterSpacing: "0.04em" }}>Deslizá para ver el menú</span>
+                <span style={{ color: "rgba(232,213,183,0.7)", fontSize: 13, fontWeight: 700, letterSpacing: "0.04em" }}>Desliza para ver el menú</span>
               </div>
               <div
                 onPointerDown={onPointerDown}

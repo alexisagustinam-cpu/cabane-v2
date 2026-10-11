@@ -1,1 +1,143 @@
 @import "tailwindcss";
+
+:root {
+  --cb-red: #7A1E3A;
+  --cb-dark: #2A1A1F;
+  --cb-cream: #EDE0CE;
+  --cb-cream2: #D4BFA0;
+  --cb-card: #F7F0E6;
+  --cb-border: #C4A882;
+  --cb-muted: #7A6555;
+  --cb-gold: #B5894A;
+  --cb-header-h: 56px;
+}
+
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html.cb-scroll-lock, html.cb-scroll-lock body { overflow: hidden; overscroll-behavior: none; }
+
+/* iPhone hace zoom al enfocar campos con letra < 16px. En pantallas táctiles
+   todos los campos quedan en 16px (gana sobre los estilos inline). */
+@media (max-width: 900px), (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea { font-size: 16px !important; }
+}
+
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  border-color: var(--cb-red) !important;
+  box-shadow: 0 0 0 3px rgba(122, 30, 58, 0.15);
+}
+button:focus-visible, [role="tab"]:focus-visible { outline: 3px solid rgba(181, 137, 74, 0.7); outline-offset: 2px; }
+button:not(:disabled):active { transform: scale(0.97); }
+button { transition: transform .12s ease, background-color .15s, border-color .15s, color .15s, box-shadow .15s; touch-action: manipulation; }
+
+/* ── Ventana inferior / diálogo ─────────────────────────────── */
+.cb-sheet-backdrop {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(23, 18, 15, 0.6);
+  -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.cb-sheet-backdrop.cb-dialog { z-index: 300; align-items: center; padding: 20px; }
+.cb-sheet {
+  position: relative; width: 100%;
+  background: var(--cb-card);
+  border-radius: 22px 22px 0 0;
+  max-height: 92vh; max-height: 92dvh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 -12px 40px rgba(23, 18, 15, 0.28);
+  outline: none; overflow: hidden;
+  will-change: transform;
+}
+.cb-dialog .cb-sheet { border-radius: 20px; max-height: 86dvh; }
+.cb-sheet-head { padding: 10px 20px 14px; touch-action: none; flex-shrink: 0; }
+.cb-dialog .cb-sheet-head { padding-top: 20px; }
+.cb-sheet-grabber { width: 44px; height: 5px; border-radius: 99px; background: var(--cb-cream2); margin: 0 auto 12px; }
+.cb-sheet-body { padding: 0 20px 18px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; flex: 1; min-height: 0; }
+.cb-sheet-foot {
+  flex-shrink: 0; padding: 12px 20px calc(14px + env(safe-area-inset-bottom));
+  border-top: 1px solid rgba(196, 168, 130, 0.5); background: var(--cb-card);
+}
+.cb-sheet-body:last-child { padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
+@media (min-width: 641px) {
+  .cb-sheet-backdrop { align-items: center; padding: 24px; }
+  .cb-sheet { border-radius: 22px; box-shadow: 0 24px 64px rgba(23, 18, 15, 0.3); max-height: 88vh; max-height: 88dvh; }
+  .cb-sheet-grabber { display: none; }
+  .cb-sheet-head { padding-top: 20px; }
+  .cb-sheet-foot { padding-bottom: 16px; }
+}
+
+.cb-icon-btn {
+  width: 40px; height: 40px; border-radius: 12px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--cb-cream2); color: var(--cb-dark); border: none; cursor: pointer;
+}
+
+/* ── Avisos flotantes ───────────────────────────────────────── */
+.cb-toaster {
+  position: fixed; z-index: 400; left: 50%; transform: translateX(-50%);
+  top: calc(env(safe-area-inset-top) + 12px);
+  width: min(440px, calc(100vw - 24px));
+  display: flex; flex-direction: column; pointer-events: none;
+}
+.cb-toast {
+  pointer-events: auto; display: flex; align-items: center; gap: 10px;
+  padding: 13px 16px; border-radius: 14px; margin-bottom: 8px; overflow: hidden;
+  font: 800 14px/1.35 'Nunito', system-ui, sans-serif;
+  box-shadow: 0 10px 30px rgba(23, 18, 15, 0.3); cursor: pointer;
+}
+
+/* ── Carrusel de opciones (NavPills) ────────────────────────── */
+.cb-pills-wrap { position: relative; min-width: 0; }
+.cb-pills { overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; }
+.cb-pills::-webkit-scrollbar { display: none; }
+.cb-pills-wrap.fade-r .cb-pills { -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); }
+.cb-pills-wrap.fade-l .cb-pills { -webkit-mask-image: linear-gradient(90deg, transparent, #000 15%); mask-image: linear-gradient(90deg, transparent, #000 15%); }
+.cb-pills-wrap.fade-l.fade-r .cb-pills { -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); }
+.cb-pills-track { position: relative; display: inline-flex; gap: 4px; padding: 4px; border-radius: 16px; min-width: 100%; }
+.cb-pills-stretch .cb-pill { flex: 1 0 auto; }
+.cb-pills-indicator {
+  position: absolute; top: 4px; bottom: 4px; left: 0; width: 0; opacity: 0;
+  border-radius: 12px; background: var(--cb-red);
+  box-shadow: 0 4px 14px rgba(122, 30, 58, 0.35); pointer-events: none;
+}
+.cb-pill {
+  position: relative; z-index: 1; scroll-snap-align: center;
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  white-space: nowrap; border: none; background: transparent; cursor: pointer;
+  font: 800 14px 'Nunito', system-ui, sans-serif; border-radius: 12px;
+  padding: 0 16px; height: 42px; transition: color .2s ease;
+}
+.cb-pills-sm .cb-pill { height: 36px; padding: 0 13px; font-size: 13px; }
+.cb-pills-lg .cb-pill { height: 46px; padding: 0 18px; font-size: 15px; }
+.cb-pill-badge {
+  min-width: 20px; height: 20px; padding: 0 6px; border-radius: 99px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 900; background: rgba(42, 26, 31, 0.1);
+}
+.cb-pills-light .cb-pills-track { background: rgba(42, 26, 31, 0.06); }
+.cb-pills-light .cb-pill { color: var(--cb-dark); }
+.cb-pills-light .cb-pill:not(.is-active):hover { background: rgba(42, 26, 31, 0.05); }
+.cb-pills-light .cb-pill.is-active { color: #fff; }
+.cb-pills-dark .cb-pills-track { background: rgba(255, 255, 255, 0.06); }
+.cb-pills-dark .cb-pill { color: rgba(255, 255, 255, 0.6); }
+.cb-pills-dark .cb-pill.is-active { color: #fff; }
+.cb-pill.is-active .cb-pill-badge { background: rgba(255, 255, 255, 0.22); }
+
+/* ── Botón de pago seleccionado (cobro en dos pasos) ─────────── */
+.cb-method.is-selected { box-shadow: 0 0 0 3px var(--cb-card), 0 0 0 6px currentColor !important; }
+
+/* Franja del modo prueba (solo en localhost / red local) */
+.cb-safe-strip {
+  background: repeating-linear-gradient(135deg, #5B4410 0 12px, #6A5015 12px 24px);
+  color: #FFF3D6; text-align: center; font: 800 12px/1.3 'Nunito', system-ui, sans-serif;
+  padding: 6px 12px; letter-spacing: 0.02em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled):active { transform: none; }
+}
+
+@media (max-width: 420px) { .hide-xs { display: none !important; } }
+@media (max-width: 640px) { .hide-sm { display: none !important; } }
+@media (min-width: 641px) { .only-sm { display: none !important; } }
+
+button { column-gap: 6px; }
