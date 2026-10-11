@@ -14,7 +14,7 @@ export function prefersReducedMotion(): boolean {
 }
 
 // Vibración corta en Android al tocar acciones frecuentes (iPhone la ignora).
-export function haptic(ms = 8) {
+export function haptic(ms: number | number[] = 8) {
   try { navigator.vibrate?.(ms); } catch { /* sin soporte */ }
 }
 

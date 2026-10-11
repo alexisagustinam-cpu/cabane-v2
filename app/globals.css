@@ -141,3 +141,37 @@ button { transition: transform .12s ease, background-color .15s, border-color .1
 @media (min-width: 641px) { .only-sm { display: none !important; } }
 
 button { column-gap: 6px; }
+
+.cb-toast-action {
+  flex-shrink: 0; height: 36px; padding: 0 14px; border-radius: 10px; border: none; cursor: pointer;
+  background: rgba(255, 255, 255, 0.18); color: inherit; font: 900 14px 'Nunito', system-ui, sans-serif;
+}
+
+/* Precios y cantidades alineados en columna (todos los dígitos del mismo ancho) */
+body { font-variant-numeric: tabular-nums; }
+
+/* Esqueletos de carga */
+.cb-skel {
+  border-radius: 16px;
+  background: linear-gradient(90deg, rgba(196,168,130,0.18) 0%, rgba(196,168,130,0.34) 40%, rgba(196,168,130,0.18) 80%);
+  background-size: 300% 100%;
+  animation: cb-shimmer 1.3s ease-in-out infinite;
+}
+@keyframes cb-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+/* Mapa de mesas en teléfono: las libres son fichas bajas, las ocupadas resaltan */
+@media (max-width: 640px) {
+  .mesa-card.is-free { min-height: 54px !important; padding: 0 14px !important; display: flex !important; align-items: center; }
+  .mesa-card.is-free .mesa-free-head, .mesa-card.is-free .mesa-free-sub { display: none !important; }
+  .mesa-card.is-free p { margin: 0 !important; font-size: 16px !important; }
+}
+@media (prefers-reduced-motion: reduce) { .cb-skel { animation: none; } }
+.mesa-sep { display: none; }
+@media (max-width: 640px) {
+  .mesa-card.is-free { order: 2; }
+  .mesa-sep {
+    display: block; order: 1; grid-column: 1 / -1; margin-top: 6px;
+    font: 800 12px 'Nunito', system-ui, sans-serif; color: var(--cb-muted);
+    text-transform: uppercase; letter-spacing: 0.1em;
+  }
+}

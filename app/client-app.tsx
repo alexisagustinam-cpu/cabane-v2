@@ -348,6 +348,9 @@ export default function App() {
   // Pedido de cobro pendiente de confirmar (cobro en dos pasos: método → confirmar).
   const [chargeIntent, setChargeIntent] = useState<{target:string; method:"efectivo"|"tarjeta"|"transferencia"}|null>(null);
   const [wakeLockOn, setWakeLockOn] = useState(false);
+  // Calculadora de vuelto: cuánto entregó el cliente en efectivo.
+  const [cashReceived, setCashReceived] = useState("");
+  useEffect(() => { setCashReceived(""); }, [chargeIntent]);
   const screenRef = useRef<HTMLDivElement>(null);
   const cartTotalRef = useRef<HTMLParagraphElement>(null);
   const kitchenListRef = useRef<HTMLDivElement>(null);
@@ -595,7 +598,9 @@ export default function App() {
 
   // Al cambiar de mesa se cierra la previsualización de lo ya pedido —
   // si no, queda abierta mostrando los items de la mesa anterior.
-  useEffect(() => { setShowMesaPreview(false); }, [mesa]);
+  // (salvo cuando se llega desde el aviso "Pedido listo → Ver", que la abre a propósito).
+  const openPreviewOnMesaRef = useRef(false);
+  useEffect(() => { setShowMesaPreview(openPreviewOnMesaRef.current); openPreviewOnMesaRef.current = false; }, [mesa]);
 
   // Si la mesa ya tiene un pedido abierto, precarga el nombre de esa
   // persona (no hace falta volver a escribirlo para pedir "una ronda más")
@@ -616,6 +621,38 @@ export default function App() {
     setCustomerName(lastNamed?.customer_name || "");
   }, [mesa, wOrders, customerNameEdited]);
 
+  // Copias en ref para leer el estado actual dentro de los eventos en vivo
+  // (los canales se crean una vez y sus callbacks verían valores viejos).
+  const wOrdersRef = useRef<Order[]>([]);
+  const tableReleaseReadyRef = useRef(false);
+  const profileRef = useRef<Profile|null>(null);
+  useEffect(() => { wOrdersRef.current = wOrders; }, [wOrders]);
+  useEffect(() => { tableReleaseReadyRef.current = tableReleaseSchemaReady; }, [tableReleaseSchemaReady]);
+  useEffect(() => { profileRef.current = profile; }, [profile]);
+
+  // Un pedido sigue en el mapa del mesero mientras la mesa no se libere
+  // (Fase 13). Sin Fase 13, mientras no esté pagado. Mismo criterio que loadWaiterOrders.
+  const stillOnWaiterMap = (o: Order) => ["enviado","preparando","listo"].includes(o.status)
+    && (tableReleaseReadyRef.current ? !o.table_released_at : o.payment_status !== "paid");
+
+  // Aviso al mesero: su pedido pasó a "listo" en cocina/barra.
+  function notifyOrderReady(o: Order) {
+    const mine = !o.created_by || o.created_by === profileRef.current?.id;
+    const who = `${o.table_label}${o.customer_name?` · ${o.customer_name}`:""}`;
+    haptic([90,60,90]);
+    toast(`${mine?"Tu pedido está listo":"Pedido listo"}: ${who}`, "success", {
+      label: "Ver",
+      onClick: () => {
+        // Solo si cambia de mesa se marca la apertura (si es la misma, el efecto no corre).
+        setMesa(prev => { if (prev!==o.table_label) openPreviewOnMesaRef.current = true; return o.table_label; });
+        setShowMesaPreview(true); setWaiterView("order");
+      },
+    });
+    if (document.visibilityState!=="visible" && typeof Notification!=="undefined" && Notification.permission==="granted") {
+      try { new Notification("Listo para entregar", { body: who, icon: "/icon-192.png", tag: `listo-${o.id}` }); } catch { /* bloqueada */ }
+    }
+  }
+
   // Realtime mesero — el mapa de mesas se actualiza solo
   useEffect(() => {
     if (screen!=="waiter") return;
@@ -625,8 +662,7 @@ export default function App() {
           const { data } = await getDB().from("orders").select("*, order_items(*)").eq("id",p.new.id).single();
           const full: Order = data || {...p.new, order_items:[]};
           setWOrders((prev:Order[]) => {
-            const operational = ["enviado","preparando","listo"].includes(full.status) && full.payment_status !== "paid";
-            if (!operational) return prev.filter((o:Order)=>o.id!==full.id);
+            if (!stillOnWaiterMap(full)) return prev.filter((o:Order)=>o.id!==full.id);
             return prev.some((o:Order)=>o.id===full.id)
               ? prev.map((o:Order)=>o.id===full.id?full:o)
               : [...prev, full];
@@ -634,9 +670,12 @@ export default function App() {
         })
       .on("postgres_changes",{event:"UPDATE",schema:"public",table:"orders"},
         (p: {new: Order}) => {
+          const before = wOrdersRef.current.find(o=>o.id===p.new.id);
+          if (before && before.status!=="listo" && p.new.status==="listo") notifyOrderReady({...before,...p.new});
+          // Antes se quitaba al cobrar y la mesa aparecía "Libre" con los clientes sentados.
           setWOrders((prev:Order[])=>prev
             .map((o:Order)=>o.id===p.new.id?{...o,...p.new}:o)
-            .filter((o:Order)=>["enviado","preparando","listo"].includes(o.status) && o.payment_status !== "paid"));
+            .filter(stillOnWaiterMap));
         })
       .subscribe();
     return () => { getDB().removeChannel(ch); };
@@ -1308,9 +1347,40 @@ export default function App() {
   }
 
   // El cliente se retractó de un ítem completo — quitarlo sin pasar por el "-"
+  // Se puede deshacer desde el aviso (por si se tocó la papelera sin querer).
   function removeCartItem(id: string) {
     pendingOrderRef.current = null;
+    const removed = cart[id];
     setCart(prev => { const n={...prev}; delete n[id]; return n; });
+    if (removed) toast(`Quitaste ${removed.qty>1?`${removed.qty}× `:""}${removed.name}`, "info", {
+      label: "Deshacer",
+      onClick: () => { pendingOrderRef.current = null; setCart(prev => ({...prev, [id]: removed})); },
+    });
+  }
+
+  // "Otra ronda igual": copia al carrito lo que ya pidió esa persona en la mesa.
+  function repeatOrder(o: Order) {
+    const before = cart;
+    const items = (o.order_items||[]).filter(i=>products.some(p=>p.id===i.product_id));
+    if (!items.length) { toast("Esos productos ya no están en el menú", "error"); return; }
+    pendingOrderRef.current = null;
+    setCart(prev => {
+      const next = {...prev};
+      for (const i of items) {
+        const p = products.find(x=>x.id===i.product_id)!;
+        const cur = next[p.id] || {...p, qty:0, notes:[], customNote:""};
+        next[p.id] = {...cur, qty: cur.qty + i.quantity, customNote: cur.customNote || i.notes || ""};
+      }
+      return next;
+    });
+    if (o.customer_name) { setCustomerName(o.customer_name); setCustomerNameEdited(true); }
+    setShowMesaPreview(false);
+    haptic(15);
+    const count = items.reduce((s,i)=>s+i.quantity,0);
+    toast(`Ronda de ${o.customer_name||`#${o.order_number}`} agregada (${count} producto${count===1?"":"s"})`, "success", {
+      label: "Deshacer",
+      onClick: () => { pendingOrderRef.current = null; setCart(before); },
+    });
   }
 
   function toggleNote(id: string, note: string) {
@@ -1809,6 +1879,9 @@ export default function App() {
 
   const renderMesaMap = (orders: Order[], onPick:(m:string)=>void, selected?: string|null, ctx="w") => (
     <div className="mesa-grid">
+      {/* Solo en teléfono: separador antes de las mesas libres (que pasan al final, en fichas bajas) */}
+      {(()=>{ const free = mesasList.filter(m=>!mesaOrdersOf(orders,m).length).length;
+        return free>0 && free<mesasList.length ? <p className="mesa-sep">Libres · {free}</p> : null; })()}
       {mesasList.map(m=>{
         const mo = mesaOrdersOf(orders, m);
         const libre = mo.length===0;
@@ -1833,7 +1906,7 @@ export default function App() {
         const oldest = mo.length ? mo.reduce((a,b)=>new Date(a.created_at)<new Date(b.created_at)?a:b) : null;
         void tick; // el tiempo de espera se refresca cada minuto
         return (
-          <button key={m} onClick={()=>{ haptic(); onPick(m); }} className="mesa-card"
+          <button key={m} onClick={()=>{ haptic(); onPick(m); }} className={`mesa-card${libre?" is-free":""}`}
             data-mesa-key={`${ctx}:${m}`} data-mesa-state={libre?"libre":paidSeated?"pagada":allListo?"listo":allPaid?"pagada-prep":"prep"} style={{
             position:"relative" as const, textAlign:"left" as const, fontFamily:FONT, cursor:"pointer",
             background: libre ? "#FBF6ED" : "#fff",
@@ -1844,12 +1917,12 @@ export default function App() {
             {/* Franja de estado */}
             <div style={{position:"absolute" as const,top:0,left:0,right:0,height:5,background:libre?"transparent":stateColor}}/>
 
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,marginBottom:8}}>
+            <div className="mesa-free-head" style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6,marginBottom:8}}>
               {/* Ícono: mesa con sillas, o take-away/delivery */}
               {isLlevar || isDelivery ? (
-                <span style={{fontSize:26,lineHeight:1}}>{isLlevar?"🥡":"🛵"}</span>
+                <span className="mesa-free-icon" style={{fontSize:26,lineHeight:1}}>{isLlevar?"🥡":"🛵"}</span>
               ) : (
-                <svg width="30" height="30" viewBox="0 0 40 40" aria-hidden="true" style={{flexShrink:0}}>
+                <svg className="mesa-free-icon" width="30" height="30" viewBox="0 0 40 40" aria-hidden="true" style={{flexShrink:0}}>
                   <circle cx="20" cy="6"  r="4.5" fill={stateColor} opacity="0.4"/>
                   <circle cx="20" cy="34" r="4.5" fill={stateColor} opacity="0.4"/>
                   <circle cx="6"  cy="20" r="4.5" fill={stateColor} opacity="0.4"/>
@@ -1868,7 +1941,7 @@ export default function App() {
             <p style={{fontSize:17,fontWeight:900,color:libre?"#8F7E66":DARK,letterSpacing:"-0.01em",marginBottom:3}}>{m}</p>
 
             {libre ? (
-              <p style={{fontSize:12,fontWeight:600,color:"#B3A184"}}>Disponible</p>
+              <p className="mesa-free-sub" style={{fontSize:12,fontWeight:600,color:"#B3A184"}}>Disponible</p>
             ) : (
               <>
                 <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8,flexWrap:"wrap" as const}}>
@@ -2148,6 +2221,12 @@ export default function App() {
                         <div key={o.id}>
                           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap" as const}}>
                             <span style={{fontSize:13,fontWeight:800,color:DARK}}>#{o.order_number}{o.customer_name?` · ${o.customer_name}`:""}</span>
+                            {(o.order_items||[]).length>0 && (
+                              <button onClick={()=>repeatOrder(o)} aria-label={`Repetir ronda de ${o.customer_name||`pedido ${o.order_number}`}`}
+                                style={{marginLeft:"auto",order:9,height:34,padding:"0 12px",borderRadius:10,border:`1.5px solid ${RED}`,background:"#fff",color:RED,fontSize:12,fontWeight:900,fontFamily:FONT,cursor:"pointer",display:"inline-flex",alignItems:"center",gap:5}}>
+                                <IconRefresh size={14}/> Repetir ronda
+                              </button>
+                            )}
                             <span style={{fontSize:11,fontWeight:800,color:"#8A6210",background:"rgba(181,137,74,0.18)",borderRadius:99,padding:"2px 8px"}}>{statusLabel[o.status]||o.status}</span>
                             {o.payment_status==="paid" && <span style={{fontSize:11,fontWeight:800,color:SLATE,background:"rgba(79,109,138,0.14)",borderRadius:99,padding:"2px 8px"}}>Pagado</span>}
                           </div>
@@ -2242,7 +2321,7 @@ export default function App() {
                           </button>
                         ) : (
                           <div aria-label={`${qty} ${p.name} en el pedido`} style={{display:"flex",alignItems:"center",height:44,borderRadius:12,overflow:"hidden",border:`1.5px solid ${RED}`,flexShrink:0,background:"#fff"}}>
-                            <button aria-label={`Quitar ${p.name}`} onClick={()=>{haptic();changeQty(p.id,-1);}} style={{width:46,height:"100%",background:"transparent",color:RED,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>{qty===1?<IconTrash size={18}/>:<IconMinus size={19} strokeWidth={2.8}/>}</button>
+                            <button aria-label={`Quitar ${p.name}`} onClick={()=>{haptic();if(qty===1)removeCartItem(p.id);else changeQty(p.id,-1);}} style={{width:46,height:"100%",background:"transparent",color:RED,border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>{qty===1?<IconTrash size={18}/>:<IconMinus size={19} strokeWidth={2.8}/>}</button>
                             <span style={{fontSize:16,fontWeight:900,color:DARK,minWidth:30,textAlign:"center" as const}}>{qty}</span>
                             <button aria-label={`Añadir otro ${p.name}`} onClick={()=>{haptic();changeQty(p.id,1);}} style={{width:46,height:"100%",background:RED,color:"#fff",border:"none",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><IconPlus size={19} strokeWidth={2.8}/></button>
                           </div>
@@ -2406,7 +2485,11 @@ export default function App() {
             </div>
           )}
 
-          {kOrders.length===0&&!kLoading ? (
+          {kOrders.length===0&&kLoading ? (
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(290px,1fr))",gap:12}} aria-busy="true" aria-label="Cargando pedidos">
+              {[0,1,2].map(i=><div key={i} className="cb-skel" style={{height:250}}/>)}
+            </div>
+          ) : kOrders.length===0&&!kLoading ? (
             <div style={{textAlign:"center" as const,padding:"60px 20px"}}>
               <p style={{fontWeight:800,fontSize:20,color:MUTED}}>Sin pedidos activos</p>
               <p style={{fontSize:14,color:MUTED,marginTop:4}}>Los nuevos pedidos aparecerán aquí</p>
@@ -2560,7 +2643,11 @@ export default function App() {
                 ):null;
               })()}
 
-              {cOrders.filter(o=>o.payment_status==="pending"&&o.status!=="cancelado").length===0&&!cLoading ? (
+              {cOrders.length===0&&cLoading ? (
+                <div style={{display:"flex",flexDirection:"column",gap:12}} aria-busy="true" aria-label="Cargando pedidos">
+                  {[0,1,2].map(i=><div key={i} className="cb-skel" style={{height:104}}/>)}
+                </div>
+              ) : cOrders.filter(o=>o.payment_status==="pending"&&o.status!=="cancelado").length===0&&!cLoading ? (
                 <div style={{textAlign:"center" as const,padding:"60px 20px"}}>
                   <p style={{fontWeight:800,fontSize:20,color:MUTED}}>Sin pedidos pendientes</p>
                 </div>
@@ -2708,7 +2795,11 @@ export default function App() {
               ))}
 
               {/* Métricas principales */}
-              {(()=>{
+              {!adminStats && adminLoading ? (
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:20}} aria-busy="true" aria-label="Cargando reportes">
+                  {[0,1,2,3,4,5].map(i=><div key={i} className="cb-skel" style={{height:86,borderRadius:14}}/>)}
+                </div>
+              ) : (()=>{
                 const rev = adminStats?.todayRevenue||0;
                 const count = adminStats?.todayCount||0;
                 const prev = adminStats?.prevRevenue||0;
@@ -4110,7 +4201,41 @@ export default function App() {
           haptic();
           setChargeIntent(prev => prev?.target===target && prev.method===m ? null : {target, method:m});
         };
+        // Efectivo: "¿con cuánto paga?" con montos rápidos y el vuelto calculado.
+        const cashHelper = (amount: number) => {
+          const received = parseFloat(cashReceived);
+          const change = Math.round((received-amount)*100)/100;
+          const quick = [...new Set([amount, Math.ceil(amount), Math.ceil(amount/5)*5, Math.ceil(amount/10)*10, 20, 50, 100]
+            .map(v=>Math.round(v*100)/100).filter(v=>v>=amount))].slice(0,5);
+          return (
+            <div style={{background:"#fff",border:`1px solid ${BORDER}`,borderRadius:12,padding:"10px 12px",marginTop:9}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                <label style={{fontSize:13,fontWeight:800,color:MUTED,whiteSpace:"nowrap" as const}}>Paga con</label>
+                <input type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" aria-label="Monto recibido en efectivo"
+                  value={cashReceived} onChange={e=>setCashReceived(e.target.value)}
+                  style={{flex:1,minWidth:0,height:44,borderRadius:10,border:`1.5px solid ${BORDER}`,padding:"0 12px",fontSize:18,fontWeight:900,fontFamily:FONT,color:DARK,background:CARD}}/>
+              </div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap" as const}}>
+                {quick.map(v=>(
+                  <button key={v} onClick={()=>{haptic();setCashReceived(v.toFixed(2));}}
+                    style={{height:36,padding:"0 12px",borderRadius:99,border:`1.5px solid ${parseFloat(cashReceived)===v?DARK:BORDER}`,background:parseFloat(cashReceived)===v?DARK:"transparent",color:parseFloat(cashReceived)===v?"#fff":DARK,fontSize:13,fontWeight:800,fontFamily:FONT,cursor:"pointer"}}>
+                    {v===amount?"Justo":Number.isInteger(v)?`$${v}`:$(v)}
+                  </button>
+                ))}
+              </div>
+              {!isNaN(received) && received>0 && (
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10,padding:"10px 12px",borderRadius:10,
+                  background:change>=0?"rgba(47,125,50,0.1)":"#FFEBEE"}}>
+                  <span style={{fontSize:14,fontWeight:800,color:change>=0?GREEN:ALERT_RED}}>{change>=0?"Vuelto":"Falta"}</span>
+                  <span style={{fontSize:24,fontWeight:900,color:change>=0?GREEN:ALERT_RED}}>{$(Math.abs(change))}</span>
+                </div>
+              )}
+            </div>
+          );
+        };
         const confirmBtn = (label: string, amount: number, onConfirm: ()=>void, busy=false) => (
+          <>
+          {chargeIntent?.method==="efectivo" && cashHelper(amount)}
           <div style={{display:"flex",gap:8,marginTop:9}}>
             <button onClick={()=>setChargeIntent(null)} aria-label="Cancelar cobro" className="cb-icon-btn" style={{height:52,width:52}}>
               <IconClose size={20}/>
@@ -4120,6 +4245,7 @@ export default function App() {
               <IconCheck size={19} strokeWidth={2.6}/> {busy?"Cobrando…":`Cobrar ${$(amount)} · ${label}`}
             </button>
           </div>
+          </>
         );
         return (
           <Sheet onClose={closeModal} maxWidth={500} eyebrow="Caja" title={payModalMesa}

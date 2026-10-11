@@ -6,14 +6,16 @@ import { gsap, prefersReducedMotion } from "./motion";
 import { IconCheck, IconInfo, IconClose } from "./icons";
 
 export type ToastKind = "success" | "error" | "info" | "safe";
-type Toast = { id: number; msg: string; kind: ToastKind };
+export type ToastAction = { label: string; onClick: () => void };
+type Toast = { id: number; msg: string; kind: ToastKind; action?: ToastAction };
 
 let nextId = 1;
 const listeners = new Set<(t: Toast) => void>();
 
-export function toast(msg: string, kind: ToastKind = "success") {
+// action: botón dentro del aviso (ej. "Deshacer").
+export function toast(msg: string, kind: ToastKind = "success", action?: ToastAction) {
   if (!msg) return;
-  const t = { id: nextId++, msg, kind };
+  const t = { id: nextId++, msg, kind, action };
   listeners.forEach(l => l(t));
 }
 
@@ -37,7 +39,7 @@ function ToastItem({ t, onDone }: { t: Toast; onDone: (id: number) => void }) {
     if (ref.current && !prefersReducedMotion()) gsap.fromTo(ref.current, { opacity: 0, y: -16, scale: 0.96 }, { opacity: 1, y: 0, scale: 1, duration: 0.32, ease: "back.out(1.6)" });
   }, []);
   useEffect(() => {
-    const ms = t.kind === "error" ? 7000 : t.kind === "safe" ? 3500 : 4500;
+    const ms = t.action ? 6000 : t.kind === "error" ? 7000 : t.kind === "safe" ? 3500 : 4500;
     const timer = setTimeout(leave, ms);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -48,6 +50,12 @@ function ToastItem({ t, onDone }: { t: Toast; onDone: (id: number) => void }) {
     <div ref={ref} role={t.kind === "error" ? "alert" : "status"} onClick={leave} className="cb-toast" style={{ background: c.bg, color: c.fg }}>
       <Icon size={18} strokeWidth={2.5} />
       <span style={{ flex: 1 }}>{t.msg}</span>
+      {t.action && (
+        <button type="button" className="cb-toast-action"
+          onClick={e => { e.stopPropagation(); t.action!.onClick(); leave(); }}>
+          {t.action.label}
+        </button>
+      )}
     </div>
   );
 }
