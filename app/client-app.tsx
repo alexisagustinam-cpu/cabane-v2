@@ -10,6 +10,8 @@ import { gsap, bump, attention, exitCard, haptic, prefersReducedMotion, useFlip 
 import { isSafeMode, safeFetch, SAFE_MODE_EVENT } from "./ui/safe-mode";
 import { uuid } from "./ui/uuid";
 import { receiptPdf, receiptPng, shareOrDownload, type ReceiptData } from "./ui/receipt";
+import { ColumnChart, ShareBar, StatTile, CATEGORICAL, SERIES } from "./ui/charts";
+import { Switch } from "./ui/Switch";
 import { DEMO_READY_EVENT, demoDeleteOrders, isDemoEnabled, resetDemo, setDemoEnabled } from "./ui/demo-store";
 import { IconTrash, IconSound, IconReceipt, IconRefresh, IconBell, IconBack, IconSearch, IconInfo, IconChart, IconList, IconWallet, IconTag, IconNote, IconBox, IconFlame, IconUsers, IconSettings, IconDownload, IconCheck, IconPlus, IconMinus, IconLogout, IconClock, IconSun, IconShare, IconCup, IconGrid, IconMove, IconSplit, IconClose, IconSwap } from "./ui/icons";
 
@@ -299,6 +301,13 @@ export default function App() {
   const [newProd, setNewProd] = useState({name:"",category:CAT_ORDER[0],price:"",description:""});
   const [editProd, setEditProd] = useState<{id:string,name:string,category:string,price:string,description:string}|null>(null);
   const [tableNote, setTableNote] = useState("");
+  // Admin › Productos: búsqueda y filtro por categoría. Admin › Usuarios: ventana de gestión.
+  const [prodSearch, setProdSearch] = useState("");
+  const [prodCat, setProdCat] = useState("__todas");
+  const [manageUser, setManageUser] = useState<Profile|null>(null);
+  // En el teléfono, los formularios de "agregar" quedan plegados para ver la lista primero.
+  const [addProdOpen, setAddProdOpen] = useState(false);
+  const [addUserOpen, setAddUserOpen] = useState(false);
   const [expandedDesc, setExpandedDesc] = useState<string|null>(null);
   const [tick, setTick] = useState(0);
   const [kSummary, setKSummary] = useState<{name:string;qty:number}[]>([]);
@@ -3119,23 +3128,14 @@ export default function App() {
                 const rev = adminStats?.todayRevenue||0;
                 const count = adminStats?.todayCount||0;
                 const prev = adminStats?.prevRevenue||0;
-                const growth = prev>0 ? ((rev-prev)/prev)*100 : null;
-                const growthLabel = adminMode==="day"?"vs día anterior":adminMode==="week"?"vs semana anterior":adminMode==="month"?"vs mes anterior":"vs período anterior";
+                const prevCount = adminStats?.prevCount||0;
+                const pct = (now:number, before:number) => before>0 ? ((now-before)/before)*100 : null;
+                const vs = adminMode==="day"?"vs día anterior":adminMode==="week"?"vs semana anterior":adminMode==="month"?"vs mes anterior":"vs período anterior";
                 return (
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:20}}>
-                    {[
-                      {v:$(rev),l:`Facturado — ${periodLabel()}`,bg:RED,fg:"#fff"},
-                      {v:String(count),l:"Pedidos",bg:DARK,fg:"#fff"},
-                      {v:$(count?rev/count:0),l:"Ticket promedio",bg:"#4A3540",fg:"#fff"},
-                      {v:growth===null?"—":`${growth>=0?"+":""}${growth.toFixed(0)}%`,l:growthLabel,bg:growth===null?CREAM2:growth>=0?GREEN:ALERT_RED,fg:growth===null?MUTED:"#fff"},
-                      {v:$(adminStats?.payBreakdown.efectivo||0),l:"Efectivo",bg:GOLD,fg:DARK},
-                      {v:$(adminStats?.payBreakdown.tarjeta||0),l:"Tarjeta",bg:GREEN,fg:"#fff"},
-                    ].map(({v,l,bg,fg})=>(
-                      <div key={l} style={{background:bg,borderRadius:14,padding:"16px",boxShadow:`0 4px 16px ${bg}33`}}>
-                        <p style={{fontSize:"clamp(18px,4vw,26px)",fontWeight:900,color:fg,lineHeight:1,marginBottom:4}}>{v}</p>
-                        <p style={{fontSize:11,fontWeight:700,color:fg,opacity:0.65,textTransform:"uppercase" as const,letterSpacing:"0.1em"}}>{l}</p>
-                      </div>
-                    ))}
+                  <div className="stats-kpis" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:10,marginBottom:20}}>
+                    <StatTile hero label={`Facturado · ${periodLabel()}`} value={$(rev)} delta={pct(rev,prev)} deltaLabel={vs}/>
+                    <StatTile label="Pedidos cobrados" value={String(count)} delta={pct(count,prevCount)} deltaLabel={vs}/>
+                    <StatTile label="Ticket promedio" value={$(count?rev/count:0)} delta={pct(count?rev/count:0, prevCount?prev/prevCount:0)} deltaLabel={vs}/>
                   </div>
                 );
               })()}
@@ -3143,10 +3143,14 @@ export default function App() {
               <div className="stats-2col">
               <div className="stats-left">
               <div className="stats-left-core">
-              {/* Transferencia */}
-              <div style={{...card,padding:14,marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <p style={{fontSize:13,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em"}}>Transferencia</p>
-                <p style={{fontSize:22,fontWeight:900,color:DARK}}>{$(adminStats?.payBreakdown.transferencia||0)}</p>
+              {/* Cómo pagaron: parte de un total → barra apilada + leyenda con valores */}
+              <div style={{...card,padding:16,marginBottom:20}}>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:12}}>Cómo pagaron</p>
+                <ShareBar format={$} parts={[
+                  {name:"Efectivo",value:adminStats?.payBreakdown.efectivo||0,color:CATEGORICAL[0]},
+                  {name:"Tarjeta",value:adminStats?.payBreakdown.tarjeta||0,color:CATEGORICAL[1]},
+                  {name:"Transferencia",value:adminStats?.payBreakdown.transferencia||0,color:CATEGORICAL[2]},
+                ]}/>
               </div>
 
               {/* Utilidad del período */}
@@ -3203,10 +3207,10 @@ export default function App() {
                           <div key={r.name}>
                             <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
                               <span style={{fontSize:13,fontWeight:700,color:DARK}}>{r.name}</span>
-                              <span style={{fontSize:13,fontWeight:900,color:ALERT_RED}}>{$(r.amount)} <span style={{color:MUTED,fontWeight:700}}>({total?Math.round(r.amount/total*100):0}%)</span></span>
+                              <span style={{fontSize:13,fontWeight:900,color:DARK}}>{$(r.amount)} <span style={{color:MUTED,fontWeight:700}}>({total?Math.round(r.amount/total*100):0}%)</span></span>
                             </div>
                             <div style={{height:8,background:CREAM,borderRadius:4,overflow:"hidden"}}>
-                              <div style={{height:"100%",width:`${total?(r.amount/total)*100:0}%`,background:ALERT_RED,borderRadius:4,opacity:0.85}}/>
+                              <div style={{height:"100%",width:`${total?(r.amount/total)*100:0}%`,background:"#5E4A40",borderRadius:4}}/>
                             </div>
                           </div>
                         ))}
@@ -3251,50 +3255,33 @@ export default function App() {
               </div>
 
               <div className="stats-charts">
-              {/* Gráfica ventas por hora */}
+              {/* Gráfica ventas por hora: solo el horario con ventas (± 1 h) */}
               <div style={{...card,padding:16,marginTop:16}}>
-                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:16}}>Ventas por hora — {periodLabel()}</p>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Ventas por hora — {periodLabel()}</p>
                 {(()=>{
                   const data = adminStats?.hourlyData||Array(24).fill(0);
-                  const max = Math.max(...data, 1);
-                  const now = new Date().getHours();
+                  const withSales = data.map((v:number,h:number)=>v>0?h:-1).filter((h:number)=>h>=0);
+                  let from = withSales.length ? Math.max(0, withSales[0]-1) : 8;
+                  let to = withSales.length ? Math.min(23, withSales[withSales.length-1]+1) : 22;
+                  if (to-from < 7) { from = Math.max(0, Math.min(from, to-7)); to = Math.min(23, from+7); }
+                  const slots = Array.from({length:to-from+1},(_,i)=>from+i);
                   return (
-                    <div style={{display:"flex",alignItems:"flex-end",gap:3,height:140,overflowX:"auto" as const}}>
-                      {data.map((v:number,h:number)=>(
-                        <div key={h} style={{display:"flex",flexDirection:"column" as const,alignItems:"center",flex:1,minWidth:20,gap:4}}>
-                          <div style={{
-                            width:"100%",borderRadius:"4px 4px 0 0",
-                            height:`${Math.max((v/max)*110,v>0?4:0)}px`,
-                            background:h===now?GOLD:v>0?RED:"rgba(196,168,130,0.2)",
-                            transition:"height .3s",
-                          }}/>
-                          <span style={{fontSize:9,fontWeight:700,color:h===now?GOLD:MUTED,lineHeight:1}}>{h}</span>
-                        </div>
-                      ))}
-                    </div>
+                    <ColumnChart ariaLabel="Ventas por hora" format={$} everyNthLabel={slots.length>12?2:1}
+                      data={slots.map(h=>({label:`${h}h`,long:`${h}:00 a ${h+1}:00`,value:data[h]}))}/>
                   );
                 })()}
-                {!adminStats && <p style={{fontSize:13,color:MUTED,fontWeight:600,marginTop:8}}>Sin datos aún</p>}
               </div>
 
               {/* Ventas por día de la semana — qué días conviene reforzar */}
               {adminMode!=="day" && (()=>{
                 const data = adminStats?.weekdayData||Array(7).fill(0);
-                const max = Math.max(...data, 1);
                 const labels = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
-                const best = data.indexOf(Math.max(...data));
+                const long = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
                 return (
                   <div style={{...card,padding:16,marginTop:16}}>
-                    <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:16}}>Ventas por día de la semana</p>
-                    <div style={{display:"flex",alignItems:"flex-end",gap:8,height:130}}>
-                      {data.map((v:number,i:number)=>(
-                        <div key={i} style={{display:"flex",flexDirection:"column" as const,alignItems:"center",flex:1,gap:4}}>
-                          <span style={{fontSize:10,fontWeight:800,color:i===best&&v>0?RED:MUTED}}>{v>0?$(v):""}</span>
-                          <div style={{width:"100%",borderRadius:"6px 6px 0 0",height:`${Math.max((v/max)*90,v>0?4:0)}px`,background:i===best&&v>0?RED:v>0?GOLD:"rgba(196,168,130,0.2)",transition:"height .3s"}}/>
-                          <span style={{fontSize:10,fontWeight:700,color:i===best&&v>0?RED:MUTED}}>{labels[i]}</span>
-                        </div>
-                      ))}
-                    </div>
+                    <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Ventas por día de la semana</p>
+                    <ColumnChart ariaLabel="Ventas por día de la semana" format={$} height={160}
+                      data={data.map((v:number,i:number)=>({label:labels[i],long:long[i],value:v}))}/>
                   </div>
                 );
               })()}
@@ -3316,10 +3303,10 @@ export default function App() {
                         <button key={r.name} onClick={()=>setSelectedReportCategory(selectedReportCategory===r.name?null:r.name)} style={{background:"transparent",textAlign:"left",padding:0}}>
                           <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
                             <span style={{fontSize:13,fontWeight:700,color:DARK}}>{r.name}</span>
-                            <span style={{fontSize:13,fontWeight:900,color:i===0?RED:DARK}}>{r.qty} uds · {$(r.revenue)} <span style={{color:MUTED,fontWeight:700}}>({total?Math.round(r.revenue/total*100):0}%)</span></span>
+                            <span style={{fontSize:13,fontWeight:900,color:DARK}}>{r.qty} {r.qty===1?"ud":"uds"} · {$(r.revenue)} <span style={{color:MUTED,fontWeight:700}}>({total?Math.round(r.revenue/total*100):0}%)</span></span>
                           </div>
                           <div style={{height:8,background:CREAM,borderRadius:4,overflow:"hidden"}}>
-                            <div style={{height:"100%",width:`${total?(r.revenue/total)*100:0}%`,background:i===0?RED:GOLD,borderRadius:4}}/>
+                            <div style={{height:"100%",width:`${total?(r.revenue/total)*100:0}%`,background:SERIES,opacity:i===0?1:0.7,borderRadius:4}}/>
                           </div>
                         </button>
                       ))}
@@ -3328,7 +3315,7 @@ export default function App() {
                         {selectedCategory.products.map(p=>(
                           <div key={p.name} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:`1px solid ${CREAM}`}}>
                             <span style={{flex:1,fontSize:13,fontWeight:700,color:DARK}}>{p.name}</span>
-                            <span style={{fontSize:12,fontWeight:700,color:MUTED}}>{p.qty} uds</span>
+                            <span style={{fontSize:12,fontWeight:700,color:MUTED}}>{p.qty} {p.qty===1?"ud":"uds"}</span>
                             <span style={{fontSize:13,fontWeight:900,color:RED}}>{$(p.revenue)}</span>
                             <span style={{fontSize:12,fontWeight:700,color:MUTED}}>{selectedCategory.revenue?Math.round(p.revenue/selectedCategory.revenue*100):0}%</span>
                           </div>
@@ -3350,7 +3337,7 @@ export default function App() {
                       <div key={p.name} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",background:i===0?`rgba(122,30,58,0.06)`:CREAM,borderRadius:10}}>
                         <span style={{fontSize:13,fontWeight:900,color:MUTED,minWidth:20}}>{i+1}</span>
                         <span style={{flex:1,fontSize:14,fontWeight:700,color:DARK}}>{p.name}</span>
-                        <span style={{fontSize:13,fontWeight:700,color:MUTED}}>{p.qty} uds</span>
+                        <span style={{fontSize:13,fontWeight:700,color:MUTED}}>{p.qty} {p.qty===1?"ud":"uds"}</span>
                         <span style={{fontSize:15,fontWeight:900,color:RED}}>{$(p.revenue)}</span>
                       </div>
                     ))}
@@ -3364,9 +3351,13 @@ export default function App() {
 
           {adminSection==="products" && (
             <div className="admin-2col">
-              {/* Agregar producto */}
+              {/* Agregar producto (plegado en el teléfono) */}
               <div className="admin-side">
-              <div style={{...card,padding:16,marginBottom:20}}>
+              <button className="add-toggle" aria-expanded={addProdOpen} onClick={()=>{haptic();setAddProdOpen(v=>!v);}}
+                style={{...btn(addProdOpen?CREAM2:DARK,addProdOpen?DARK:"#fff"),width:"100%",height:50,gap:6,marginBottom:12}}>
+                {addProdOpen?<><IconClose size={17}/> Cerrar formulario</>:<><IconPlus size={17}/> Agregar producto</>}
+              </button>
+              <div className={`add-collapsible${addProdOpen?"":" is-collapsed"}`} style={{...card,padding:16,marginBottom:20}}>
                 <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar producto</p>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
                   <input placeholder="Nombre" value={newProd.name} onChange={e=>setNewProd(p=>({...p,name:e.target.value}))}
@@ -3389,65 +3380,54 @@ export default function App() {
               </div>
               </div>
 
-              {/* Lista productos */}
-              <div style={{...card,padding:16}}>
-                <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Productos ({adminProducts.length})</p>
-                <div style={{display:"flex",flexDirection:"column" as const,gap:6}}>
-                  {catsFor(adminProducts).filter(c=>adminProducts.some(p=>p.category===c)).map(cat=>(
-                    <div key={cat}>
-                      <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",padding:"8px 0 4px"}}>{cat}</p>
-                      {adminProducts.filter(p=>p.category===cat).map(p=>(
-                        <div key={p.id} style={{marginBottom:6}}>
-                          <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:CREAM,flexWrap:"wrap" as const,
-                            borderRadius:editProd?.id===p.id?"10px 10px 0 0":"10px",
-                            opacity:(p as Product & {is_active?:boolean}).is_active===false?0.5:1}}>
-                            <div style={{display:"flex",alignItems:"center",gap:8,flex:"1 1 170px",minWidth:0}}>
-                              <span style={{flex:1,fontSize:14,fontWeight:700,color:DARK,lineHeight:1.3}}>{p.name}</span>
-                              <span style={{fontSize:14,fontWeight:900,color:RED,textAlign:"right" as const,flexShrink:0}}>{$(p.price)}</span>
-                            </div>
-                            <div style={{display:"flex",gap:6,marginLeft:"auto"}}>
-                            <button onClick={()=>setEditProd(editProd?.id===p.id?null:{id:p.id,name:p.name,category:p.category,price:String(p.price),description:p.description||""})}
-                              style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
-                                background:editProd?.id===p.id?GOLD:CREAM2,color:editProd?.id===p.id?"#fff":DARK}}>
-                              {editProd?.id===p.id?"Cerrar":"Editar"}
-                            </button>
-                            <button onClick={()=>toggleProduct(p.id,(p as Product & {is_active?:boolean}).is_active!==false)}
-                              style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:`1px solid ${BORDER}`,cursor:"pointer",
-                                background:(p as Product & {is_active?:boolean}).is_active===false?CREAM2:GREEN,color:(p as Product & {is_active?:boolean}).is_active===false?DARK:"#fff"}}>
-                              {(p as Product & {is_active?:boolean}).is_active===false?"Activar":"Activo"}
-                            </button>
-                            <button onClick={()=>deleteProduct(p.id)}
-                              style={{minHeight:40,padding:"6px 12px",borderRadius:10,fontSize:13,fontWeight:700,fontFamily:FONT,border:"none",cursor:"pointer",background:"rgba(122,30,58,0.1)",color:RED}}>
-                              Eliminar
-                            </button>
-                            </div>
-                          </div>
-                          {editProd?.id===p.id && (
-                            <div style={{background:CARD,border:`1.5px solid ${BORDER}`,borderTop:"none",borderRadius:"0 0 10px 10px",padding:"12px 12px 14px"}}>
-                              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-                                <input placeholder="Nombre" value={editProd.name} onChange={e=>setEditProd(ep=>ep?{...ep,name:e.target.value}:ep)}
-                                  style={{padding:"9px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
-                                <input placeholder="Precio" type="number" value={editProd.price} onChange={e=>setEditProd(ep=>ep?{...ep,price:e.target.value}:ep)}
-                                  style={{padding:"9px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+              {/* Lista productos: buscador, filtro por categoría, interruptor y edición en ventana */}
+              {(()=>{
+                const q = prodSearch.trim().toLocaleLowerCase("es");
+                const cats = catsFor(adminProducts).filter(c=>adminProducts.some(p=>p.category===c));
+                const isActive = (p: Product) => (p as Product & {is_active?:boolean}).is_active!==false;
+                const filtered = adminProducts.filter(p=>(prodCat==="__todas"||p.category===prodCat) && (!q || p.name.toLocaleLowerCase("es").includes(q) || (p.description||"").toLocaleLowerCase("es").includes(q)));
+                const inactive = adminProducts.filter(p=>!isActive(p)).length;
+                return (
+                  <div style={{...card,padding:16,minWidth:0}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10,marginBottom:12,flexWrap:"wrap" as const}}>
+                      <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em"}}>Productos ({adminProducts.length})</p>
+                      {inactive>0 && <span style={{fontSize:12,fontWeight:800,color:MUTED}}>{inactive} desactivado{inactive>1?"s":""}</span>}
+                    </div>
+                    <div style={{position:"relative" as const,marginBottom:10}}>
+                      <span style={{position:"absolute" as const,left:13,top:"50%",transform:"translateY(-50%)",color:MUTED,display:"flex",pointerEvents:"none"}}><IconSearch size={17}/></span>
+                      <input type="search" placeholder="Buscar producto…" aria-label="Buscar producto" value={prodSearch} onChange={e=>setProdSearch(e.target.value)}
+                        style={{width:"100%",height:46,padding:"0 14px 0 40px",borderRadius:12,border:`1.5px solid ${prodSearch?RED:BORDER}`,fontSize:15,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
+                    </div>
+                    <div style={{marginBottom:12}}>
+                      <NavPills size="sm" ariaLabel="Filtrar por categoría" active={prodCat} onChange={k=>{haptic();setProdCat(k);}}
+                        items={[{key:"__todas",label:"Todas",badge:adminProducts.length},...cats.map(c=>({key:c,label:c,badge:adminProducts.filter(p=>p.category===c).length}))]}/>
+                    </div>
+                    {filtered.length===0 && <p style={{fontSize:14,fontWeight:700,color:MUTED,padding:"14px 0"}}>No hay productos que coincidan.</p>}
+                    <div style={{display:"flex",flexDirection:"column" as const,gap:6}}>
+                      {catsFor(filtered).filter(c=>filtered.some(p=>p.category===c)).map(cat=>(
+                        <div key={cat}>
+                          {prodCat==="__todas" && <p style={{fontSize:11,fontWeight:800,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",padding:"10px 0 6px"}}>{cat}</p>}
+                          {filtered.filter(p=>p.category===cat).map(p=>(
+                            <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 6px 8px 12px",background:isActive(p)?"#fff":CREAM,border:`1px solid ${isActive(p)?"rgba(196,168,130,0.5)":"transparent"}`,borderRadius:12,marginBottom:6}}>
+                              <div style={{flex:1,minWidth:0,opacity:isActive(p)?1:0.55}}>
+                                <p style={{fontSize:15,fontWeight:800,color:DARK,lineHeight:1.25}}>{p.name}</p>
+                                {p.description && <p style={{fontSize:12,fontWeight:600,color:MUTED,whiteSpace:"nowrap" as const,overflow:"hidden",textOverflow:"ellipsis"}}>{p.description}</p>}
                               </div>
-                              <select value={editProd.category} onChange={e=>setEditProd(ep=>ep?{...ep,category:e.target.value}:ep)}
-                                style={{width:"100%",padding:"9px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:8}}>
-                                {catList.map(c=><option key={c} value={c}>{c}</option>)}
-                              </select>
-                              <textarea placeholder="Descripción (opcional)" value={editProd.description} onChange={e=>setEditProd(ep=>ep?{...ep,description:e.target.value}:ep)}
-                                rows={2} style={{width:"100%",padding:"9px 12px",borderRadius:8,border:`1.5px solid ${BORDER}`,fontSize:13,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",resize:"vertical" as const,marginBottom:10}}/>
-                              <button onClick={saveEditProd} disabled={!editProd.name||!editProd.price}
-                                style={{...btn(RED,"#fff",!editProd.name||!editProd.price),width:"100%",height:42,fontSize:13}}>
-                                Guardar cambios
+                              <span style={{fontSize:15,fontWeight:900,color:RED,flexShrink:0,opacity:isActive(p)?1:0.55}}>{$(p.price)}</span>
+                              <Switch checked={isActive(p)} label={`${isActive(p)?"Desactivar":"Activar"} ${p.name}`}
+                                onChange={()=>{haptic();toggleProduct(p.id,isActive(p));toast(`${p.name}: ${isActive(p)?"oculto del menú":"visible en el menú"}`,"info");}}/>
+                              <button onClick={()=>setEditProd({id:p.id,name:p.name,category:p.category,price:String(p.price),description:p.description||""})}
+                                aria-label={`Editar ${p.name}`} className="cb-icon-btn" style={{background:CREAM2}}>
+                                <IconSettings size={17}/>
                               </button>
                             </div>
-                          )}
+                          ))}
                         </div>
                       ))}
                     </div>
-                  ))}
-                </div>
-              </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -4132,9 +4112,13 @@ export default function App() {
             );
             return (
               <div className="admin-2col">
-                {/* Crear usuario */}
+                {/* Crear usuario (plegado en el teléfono) */}
                 <div className="admin-side">
-                <div style={{...card,padding:20,marginBottom:20}}>
+                <button className="add-toggle" aria-expanded={addUserOpen} onClick={()=>{haptic();setAddUserOpen(v=>!v);}}
+                  style={{...btn(addUserOpen?CREAM2:DARK,addUserOpen?DARK:"#fff"),width:"100%",height:50,gap:6,marginBottom:12}}>
+                  {addUserOpen?<><IconClose size={17}/> Cerrar formulario</>:<><IconPlus size={17}/> Agregar usuario</>}
+                </button>
+                <div className={`add-collapsible${addUserOpen?"":" is-collapsed"}`} style={{...card,padding:20,marginBottom:20}}>
                   <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:14}}>Agregar nuevo usuario</p>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:10}}>
                     <input placeholder="Nombre completo" value={newUser.name} onChange={e=>setNewUser(u=>({...u,name:e.target.value}))} style={chipInput}/>
@@ -4163,74 +4147,36 @@ export default function App() {
                 <div style={{...card,padding:20}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
                     <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em"}}>Equipo activo ({adminUsers.length})</p>
-                    <button onClick={loadUsers} style={{...btn(CREAM2,DARK),height:34,padding:"0 14px",fontSize:12}}>{usersLoading?"…":"↻"}</button>
+                    <button onClick={loadUsers} aria-label="Actualizar usuarios" style={{...btn(CREAM2,DARK),height:44,width:44,padding:0}}><IconRefresh size={17} style={usersLoading?{animation:"spin .8s linear infinite"}:undefined}/></button>
                   </div>
                   {adminUsers.length===0 && !usersLoading && (
                     <p style={{fontSize:13,color:MUTED,fontWeight:600,padding:"8px 0"}}>No hay usuarios aún</p>
                   )}
+                  <div style={{display:"flex",flexDirection:"column" as const,gap:8}}>
                   {adminUsers.map(u=>(
-                    <div key={u.id} style={{padding:"12px 0",borderBottom:`1px solid ${BORDER}`}}>
-                      <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" as const}}>
-                        <div style={{width:40,height:40,borderRadius:"50%",background:roleBg[u.roles[0]||"waiter"],display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                          <span style={{fontSize:15,fontWeight:900,color:roleFg[u.roles[0]||"waiter"]}}>{u.name.charAt(0).toUpperCase()}</span>
-                        </div>
-                        <div style={{flex:"1 1 150px",minWidth:0}}>
-                          <p style={{fontSize:14,fontWeight:700,color:DARK,marginBottom:2}}>{u.name}</p>
-                          <p style={{fontSize:12,color:MUTED,fontWeight:600,wordBreak:"break-word" as const}}>{u.email||"—"}</p>
-                        </div>
-                        {editRoles?.id===u.id ? (
-                          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap" as const}}>
-                            {renderRoleChips(editRoles.roles, r=>setEditRoles({id:u.id,roles:toggleRole(editRoles.roles,r)}))}
-                            <button onClick={()=>updateUserRoles(u.id,editRoles.roles)} disabled={!editRoles.roles.length}
-                              style={{...btn(GREEN,"#fff",!editRoles.roles.length),height:34,padding:"0 12px",fontSize:13,minHeight:34}}>OK</button>
-                            <button onClick={()=>setEditRoles(null)}
-                              style={{...btn(CREAM2,DARK),height:34,padding:"0 12px",fontSize:13,minHeight:34}}>×</button>
-                          </div>
-                        ) : (
-                          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap" as const}}>
-                            {u.roles.map(r=>(
-                              <span key={r} style={{background:roleBg[r],color:roleFg[r],padding:"4px 10px",borderRadius:999,fontSize:11,fontWeight:700,letterSpacing:"0.05em"}}>{roleLabels[r]}</span>
-                            ))}
-                            {u.id!==profile?.id && (
-                              <>
-                                <button onClick={()=>setEditRoles({id:u.id,roles:u.roles})}
-                                  style={{...btn(CREAM2,DARK),height:32,padding:"0 10px",fontSize:12,minHeight:32}}>Rol</button>
-                                <button onClick={()=>setEditProfile({id:u.id,name:u.name,email:u.email||""})}
-                                  style={{...btn(CREAM2,DARK),height:32,padding:"0 10px",fontSize:12,minHeight:32}}>Editar</button>
-                                <button onClick={()=>setResetPwFor({id:u.id,password:""})}
-                                  style={{...btn(CREAM2,DARK),height:32,padding:"0 10px",fontSize:12,minHeight:32}}>Reset pass</button>
-                                <button onClick={()=>removeUserProfile(u.id)}
-                                  style={{...btn("rgba(122,30,58,0.1)",RED),height:32,padding:"0 10px",fontSize:12,minHeight:32}}>Quitar</button>
-                              </>
-                            )}
-                          </div>
-                        )}
+                    <div key={u.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 10px 10px 12px",background:"#fff",border:"1px solid rgba(196,168,130,0.5)",borderRadius:14}}>
+                      <div aria-hidden="true" style={{width:42,height:42,borderRadius:"50%",background:roleBg[u.roles[0]||"waiter"],display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                        <span style={{fontSize:16,fontWeight:900,color:roleFg[u.roles[0]||"waiter"]}}>{u.name.charAt(0).toUpperCase()}</span>
                       </div>
-                      {editProfile?.id===u.id && (
-                        <div style={{display:"flex",gap:6,flexWrap:"wrap" as const,marginTop:10}}>
-                          <input placeholder="Nombre" value={editProfile.name} onChange={e=>setEditProfile({...editProfile,name:e.target.value})}
-                            style={{...chipInput,padding:"8px 12px",fontSize:13,flex:"1 1 150px"}}/>
-                          <input placeholder="Email" type="email" value={editProfile.email} onChange={e=>setEditProfile({...editProfile,email:e.target.value})}
-                            style={{...chipInput,padding:"8px 12px",fontSize:13,flex:"1 1 150px"}}/>
-                          <button onClick={saveEditProfile} disabled={!editProfile.name||!editProfile.email}
-                            style={{...btn(GREEN,"#fff",!editProfile.name||!editProfile.email),height:36,padding:"0 12px",fontSize:13,minHeight:36}}>OK</button>
-                          <button onClick={()=>setEditProfile(null)}
-                            style={{...btn(CREAM2,DARK),height:36,padding:"0 12px",fontSize:13,minHeight:36}}>×</button>
+                      <div style={{flex:1,minWidth:0}}>
+                        <p style={{fontSize:15,fontWeight:800,color:DARK,lineHeight:1.2}}>{u.name}{u.id===profile?.id && <span style={{fontSize:11,fontWeight:800,color:MUTED,marginLeft:6}}>(tú)</span>}</p>
+                        <p style={{fontSize:12,color:MUTED,fontWeight:600,whiteSpace:"nowrap" as const,overflow:"hidden",textOverflow:"ellipsis"}}>{u.email||"—"}</p>
+                        <div style={{display:"flex",gap:4,flexWrap:"wrap" as const,marginTop:5}}>
+                          {u.roles.map(r=>(
+                            <span key={r} style={{background:roleBg[r],color:roleFg[r],padding:"2px 9px",borderRadius:999,fontSize:11,fontWeight:800}}>{roleLabels[r]}</span>
+                          ))}
                         </div>
-                      )}
-                      {resetPwFor?.id===u.id && (
-                        <div style={{display:"flex",gap:6,flexWrap:"wrap" as const,marginTop:10}}>
-                          <input placeholder="Nueva contraseña (mín. 6 caracteres)" type="password" value={resetPwFor.password}
-                            onChange={e=>setResetPwFor({...resetPwFor,password:e.target.value})}
-                            style={{...chipInput,padding:"8px 12px",fontSize:13,flex:"1 1 220px"}}/>
-                          <button onClick={saveResetPw} disabled={resetPwFor.password.length<6}
-                            style={{...btn(GREEN,"#fff",resetPwFor.password.length<6),height:36,padding:"0 12px",fontSize:13,minHeight:36}}>OK</button>
-                          <button onClick={()=>setResetPwFor(null)}
-                            style={{...btn(CREAM2,DARK),height:36,padding:"0 12px",fontSize:13,minHeight:36}}>×</button>
-                        </div>
+                      </div>
+                      {u.id!==profile?.id && (
+                        <button onClick={()=>{setManageUser(u);setEditProfile({id:u.id,name:u.name,email:u.email||""});setEditRoles({id:u.id,roles:u.roles});setResetPwFor({id:u.id,password:""});setUserMsg("");}}
+                          aria-label={`Gestionar ${u.name}`}
+                          style={{...btn(CREAM2,DARK),height:44,padding:"0 14px",fontSize:13,gap:6,flexShrink:0}}>
+                          <IconSettings size={16}/><span className="hide-xs">Gestionar</span>
+                        </button>
                       )}
                     </div>
                   ))}
+                  </div>
                 </div>
               </div>
             );
@@ -5076,6 +5022,88 @@ export default function App() {
         );
       })()}
 
+      {/* ── EDITAR PRODUCTO ─────────────────────────────────────── */}
+      {editProd && (
+        <Sheet onClose={()=>setEditProd(null)} maxWidth={460} eyebrow="Editar producto" title={editProd.name||"Producto"}
+          footer={
+            <div style={{display:"grid",gridTemplateColumns:"auto 1fr",gap:10}}>
+              <button onClick={()=>{const id=editProd.id;setEditProd(null);deleteProduct(id);}} aria-label="Eliminar producto"
+                style={{...btn("rgba(198,40,40,0.1)",ALERT_RED),height:52,width:52,padding:0}}><IconTrash size={19}/></button>
+              <button onClick={async()=>{await saveEditProd();toast("Producto actualizado");}} disabled={!editProd.name||!editProd.price}
+                style={{...btn(RED,"#fff",!editProd.name||!editProd.price),height:52,fontSize:16}}>Guardar cambios</button>
+            </div>
+          }>
+          {(()=>{
+            const field = {width:"100%",height:48,padding:"0 14px",borderRadius:12,border:`1.5px solid ${BORDER}`,fontSize:15,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"};
+            const lbl = (t:string) => <p style={{fontSize:11,fontWeight:800,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",margin:"12px 0 6px"}}>{t}</p>;
+            return (
+              <>
+                {lbl("Nombre")}
+                <input value={editProd.name} onChange={e=>setEditProd(ep=>ep?{...ep,name:e.target.value}:ep)} style={field}/>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1.4fr",gap:10}}>
+                  <div>{lbl("Precio")}<input type="number" inputMode="decimal" step="0.01" value={editProd.price} onChange={e=>setEditProd(ep=>ep?{...ep,price:e.target.value}:ep)} style={field}/></div>
+                  <div>{lbl("Categoría")}
+                    <select value={editProd.category} onChange={e=>setEditProd(ep=>ep?{...ep,category:e.target.value}:ep)} style={field}>
+                      {catList.map(c=><option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                </div>
+                {lbl("Descripción (opcional)")}
+                <textarea rows={3} value={editProd.description} onChange={e=>setEditProd(ep=>ep?{...ep,description:e.target.value}:ep)}
+                  style={{...field,height:"auto",padding:"12px 14px",resize:"vertical" as const}}/>
+              </>
+            );
+          })()}
+        </Sheet>
+      )}
+
+      {/* ── GESTIONAR USUARIO ───────────────────────────────────── */}
+      {manageUser && editProfile && editRoles && resetPwFor && (()=>{
+        const roleLabels: Record<Role,string> = { waiter:"Mesero", kitchen:"Cocina", bar:"Barra", cashier:"Caja", admin:"Admin" };
+        const field = {width:"100%",height:48,padding:"0 14px",borderRadius:12,border:`1.5px solid ${BORDER}`,fontSize:15,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"};
+        const section = (t:string) => <p style={{fontSize:11,fontWeight:800,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.08em",margin:"18px 0 8px"}}>{t}</p>;
+        const close = () => { setManageUser(null); setEditProfile(null); setEditRoles(null); setResetPwFor(null); };
+        return (
+          <Sheet onClose={close} maxWidth={480} eyebrow="Gestionar usuario" title={manageUser.name} subtitle={manageUser.email||undefined}>
+            {section("Datos")}
+            <div style={{display:"flex",flexDirection:"column" as const,gap:8}}>
+              <input aria-label="Nombre" placeholder="Nombre" value={editProfile.name} onChange={e=>setEditProfile({...editProfile,name:e.target.value})} style={field}/>
+              <input aria-label="Email" placeholder="Email" type="email" value={editProfile.email} onChange={e=>setEditProfile({...editProfile,email:e.target.value})} style={field}/>
+              <button disabled={!editProfile.name||!editProfile.email||(editProfile.name===manageUser.name&&editProfile.email===(manageUser.email||""))}
+                onClick={async()=>{await patchUser({id:manageUser.id,name:editProfile.name,email:editProfile.email});toast("Datos guardados");close();}}
+                style={{...btn(DARK,"#fff",!editProfile.name||!editProfile.email||(editProfile.name===manageUser.name&&editProfile.email===(manageUser.email||""))),height:46}}>Guardar datos</button>
+            </div>
+
+            {section("Roles")}
+            <div style={{display:"flex",gap:6,flexWrap:"wrap" as const,marginBottom:8}}>
+              {ROLE_ORDER.map(r=>{
+                const on = editRoles.roles.includes(r);
+                return (
+                  <button key={r} type="button" aria-pressed={on} onClick={()=>{haptic();setEditRoles({...editRoles,roles:on?editRoles.roles.filter(x=>x!==r):[...editRoles.roles,r]});}}
+                    style={{minHeight:42,padding:"6px 14px",borderRadius:999,fontSize:14,fontWeight:800,fontFamily:FONT,border:`1.5px solid ${on?DARK:BORDER}`,cursor:"pointer",background:on?DARK:"#fff",color:on?"#fff":MUTED,display:"inline-flex",alignItems:"center",gap:5}}>
+                    {on && <IconCheck size={14} strokeWidth={3}/>}{roleLabels[r]}
+                  </button>
+                );
+              })}
+            </div>
+            <button disabled={!editRoles.roles.length||editRoles.roles.slice().sort().join()===manageUser.roles.slice().sort().join()}
+              onClick={async()=>{await updateUserRoles(manageUser.id,editRoles.roles);toast("Roles actualizados");close();}}
+              style={{...btn(DARK,"#fff",!editRoles.roles.length||editRoles.roles.slice().sort().join()===manageUser.roles.slice().sort().join()),width:"100%",height:46}}>Guardar roles</button>
+
+            {section("Contraseña")}
+            <div style={{display:"flex",gap:8}}>
+              <input aria-label="Nueva contraseña" placeholder="Nueva contraseña (mín. 6)" type="password" value={resetPwFor.password}
+                onChange={e=>setResetPwFor({...resetPwFor,password:e.target.value})} style={{...field,flex:1,minWidth:0}}/>
+              <button disabled={resetPwFor.password.length<6} onClick={async()=>{await patchUser({id:manageUser.id,password:resetPwFor.password});toast("Contraseña cambiada");close();}}
+                style={{...btn(DARK,"#fff",resetPwFor.password.length<6),height:48,padding:"0 16px",flexShrink:0}}>Cambiar</button>
+            </div>
+
+            {section("Acceso")}
+            <button onClick={()=>{const id=manageUser.id;close();removeUserProfile(id);}}
+              style={{...btn("rgba(198,40,40,0.1)",ALERT_RED),width:"100%",height:46,gap:6}}><IconTrash size={17}/> Quitar acceso a {manageUser.name}</button>
+          </Sheet>
+        );
+      })()}
     </div>
   );
 }

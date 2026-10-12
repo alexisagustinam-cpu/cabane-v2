@@ -220,3 +220,10 @@ body { font-variant-numeric: tabular-nums; }
   .kds-meta .kds-legend { margin-bottom: 0 !important; flex-shrink: 0; }
   .kds-meta .kds-top { margin-bottom: 0 !important; flex: 1; }
 }
+
+/* Formularios de "agregar" en Admin: plegados en teléfono/tablet vertical, visibles al lado en computadora */
+.add-toggle { display: none !important; }
+@media (max-width: 999px) {
+  .add-toggle { display: flex !important; }
+  .add-collapsible.is-collapsed { display: none; }
+}
