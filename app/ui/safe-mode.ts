@@ -4,6 +4,7 @@
 // se simula aquí: lecturas y login pasan normal, inserts/updates/RPC no
 // llegan a Supabase. Se desactiva con NEXT_PUBLIC_ALLOW_LOCAL_WRITES=1.
 
+import { uuid } from "./uuid";
 import { demoGet, demoMutate, isDemoEnabled } from "./demo-store";
 
 export const SAFE_MODE_EVENT = "cabane:safe-mode-write";
@@ -34,7 +35,7 @@ const RPC_RESULTS: Record<string, unknown> = {
 };
 
 function withFakeIds(row: Record<string, unknown>) {
-  return { id: crypto.randomUUID(), created_at: new Date().toISOString(), order_number: 0, order_items: [], ...row };
+  return { id: uuid(), created_at: new Date().toISOString(), order_number: 0, order_items: [], ...row };
 }
 
 export const safeFetch: typeof fetch = async (input, init) => {
@@ -75,6 +76,6 @@ export const safeFetch: typeof fetch = async (input, init) => {
     return json(wantsObject ? rows[0] : rows, 201);
   }
   // PATCH/DELETE: se devuelve una fila simulada para que la UI lo dé por hecho.
-  const row = { id: crypto.randomUUID(), ...(body && typeof body === "object" ? body : {}) };
+  const row = { id: uuid(), ...(body && typeof body === "object" ? body : {}) };
   return json(wantsObject ? row : [row]);
 };

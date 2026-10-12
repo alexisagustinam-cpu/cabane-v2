@@ -8,6 +8,7 @@ import { Toaster, toast } from "./ui/Toaster";
 import { NavPills } from "./ui/NavPills";
 import { gsap, bump, attention, exitCard, haptic, prefersReducedMotion, useFlip } from "./ui/motion";
 import { isSafeMode, safeFetch, SAFE_MODE_EVENT } from "./ui/safe-mode";
+import { uuid } from "./ui/uuid";
 import { DEMO_READY_EVENT, demoDeleteOrders, isDemoEnabled, resetDemo, setDemoEnabled } from "./ui/demo-store";
 import { IconTrash, IconSound, IconReceipt, IconRefresh, IconBell, IconBack, IconSearch, IconInfo, IconChart, IconList, IconWallet, IconTag, IconNote, IconBox, IconFlame, IconUsers, IconSettings, IconDownload, IconCheck, IconPlus, IconMinus, IconLogout, IconClock, IconSun, IconShare, IconCup, IconGrid, IconMove, IconSplit, IconClose } from "./ui/icons";
 
@@ -1422,7 +1423,7 @@ export default function App() {
     const total = items.reduce((s,i)=>s+i.price*i.qty,0);
     // Se mantiene la misma clave mientras haya un intento pendiente para
     // esta composición del pedido — si se edita el carrito, se descarta.
-    if (!pendingOrderRef.current) pendingOrderRef.current = crypto.randomUUID();
+    if (!pendingOrderRef.current) pendingOrderRef.current = uuid();
     const clientRef = pendingOrderRef.current;
     setSending(true);
     try {

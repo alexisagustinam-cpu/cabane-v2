@@ -5,6 +5,7 @@
 // triggers de estado, cobros), para poder probar el flujo completo. Vive en
 // sessionStorage: se borra al cerrar la pestaña o con "Reiniciar demo".
 
+import { uuid } from "./uuid";
 export const DEMO_READY_EVENT = "cabane:demo-order-ready";
 const KEY = "cabane_demo_v1";
 const BAR_CATEGORIES = ["Bebidas", "Cafés", "Postres"];
@@ -75,9 +76,9 @@ async function seed(origin: string, headers: Headers) {
   const payments: Row[] = [];
   let num = 101;
   const add = (table: string, name: string, mins: number, lines: [Product, number, string, string?][], paid = false) => {
-    const id = crypto.randomUUID();
+    const id = uuid();
     const its = lines.map(([p, qty, st, notes]) => ({
-      id: crypto.randomUUID(), order_id: id, product_id: p.id, product_name: p.name, quantity: qty,
+      id: uuid(), order_id: id, product_id: p.id, product_name: p.name, quantity: qty,
       unit_price: p.price, notes: notes ?? null, station: stationOf(p.category), item_status: st,
     }));
     const total = round2(its.reduce((s, i) => s + (i.quantity as number) * (i.unit_price as number), 0));
@@ -87,7 +88,7 @@ async function seed(origin: string, headers: Headers) {
       total, created_at, table_released_at: null, table_note: null, customer_name: name, creator_name: "Mesero demo",
     });
     items.push(...its);
-    if (paid) payments.push({ id: crypto.randomUUID(), order_id: id, method: "efectivo", amount: total, created_at, charger_name: "Caja demo" });
+    if (paid) payments.push({ id: uuid(), order_id: id, method: "efectivo", amount: total, created_at, charger_name: "Caja demo" });
   };
   add("Mesa 1", "Ana", 3, [[kp(0), 2, "enviado", "sin cebolla"], [bp(0), 2, "enviado"]]);
   add("Mesa 3", "Carlos", 12, [[kp(1), 1, "preparando"], [bp(1), 1, "listo"]]);
@@ -255,7 +256,7 @@ export async function demoMutate(path: string, method: string, url: URL, body: u
     if (o.payment_status === "paid") return json({ ok: false, error: "Este pedido ya fue cobrado" });
     const parts = (b.p_parts as { method: string; amount: number }[]) || [];
     if (Math.abs(parts.reduce((t, p) => t + p.amount, 0) - (o.total as number)) > 0.01) return json({ ok: false, error: "La suma no coincide con el total" });
-    parts.forEach(p => s.payments.push({ id: crypto.randomUUID(), order_id: o.id, method: p.method, amount: p.amount, created_at: new Date().toISOString(), charger_name: "Prueba" }));
+    parts.forEach(p => s.payments.push({ id: uuid(), order_id: o.id, method: p.method, amount: p.amount, created_at: new Date().toISOString(), charger_name: "Prueba" }));
     o.payment_status = "paid";
     persist();
     return json({ ok: true });
@@ -284,9 +285,9 @@ export async function demoMutate(path: string, method: string, url: URL, body: u
       if (!line || a.quantity > line.pending + 0.0001) return json({ ok: false, error: "Cantidad mayor a lo pendiente" });
       amount += a.quantity * (s.items.find(i => i.id === a.order_item_id)!.unit_price as number);
     }
-    allocs.forEach(a => s.allocs.push({ id: crypto.randomUUID(), order_id: o.id, order_item_id: a.order_item_id, quantity: a.quantity, person_name: b.p_person_name ?? null }));
+    allocs.forEach(a => s.allocs.push({ id: uuid(), order_id: o.id, order_item_id: a.order_item_id, quantity: a.quantity, person_name: b.p_person_name ?? null }));
     amount = round2(amount);
-    s.payments.push({ id: crypto.randomUUID(), order_id: o.id, method: b.p_method, amount, created_at: new Date().toISOString(), charger_name: "Prueba" });
+    s.payments.push({ id: uuid(), order_id: o.id, method: b.p_method, amount, created_at: new Date().toISOString(), charger_name: "Prueba" });
     const after = pendingItems(o.id);
     const orderPaid = after.every(p => p.pending <= 0.0001);
     if (orderPaid) o.payment_status = "paid";
@@ -296,14 +297,14 @@ export async function demoMutate(path: string, method: string, url: URL, body: u
 
   if (path === "orders" && method === "POST") {
     const rows = (Array.isArray(body) ? body : [b]).map((r: Row) => ({
-      id: crypto.randomUUID(), order_number: s.seq++, created_at: new Date().toISOString(), status: "enviado",
+      id: uuid(), order_number: s.seq++, created_at: new Date().toISOString(), status: "enviado",
       payment_status: "pending", table_released_at: null, table_note: null, customer_name: null, ...r,
     }));
     s.orders.push(...rows); persist();
     return respond(rows.map(r => (/order_items/.test(select) ? { ...r, order_items: [] } : r)), wantsObject, 201);
   }
   if (path === "order_items" && method === "POST") {
-    const rows = (Array.isArray(body) ? body : [b]).map((r: Row) => ({ id: crypto.randomUUID(), item_status: "enviado", notes: null, ...r }));
+    const rows = (Array.isArray(body) ? body : [b]).map((r: Row) => ({ id: uuid(), item_status: "enviado", notes: null, ...r }));
     s.items.push(...rows); persist();
     return respond(rows, wantsObject, 201);
   }
