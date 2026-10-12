@@ -4,6 +4,8 @@
 // se simula aquí: lecturas y login pasan normal, inserts/updates/RPC no
 // llegan a Supabase. Se desactiva con NEXT_PUBLIC_ALLOW_LOCAL_WRITES=1.
 
+import { demoGet, demoMutate, isDemoEnabled } from "./demo-store";
+
 export const SAFE_MODE_EVENT = "cabane:safe-mode-write";
 
 export function isSafeMode(): boolean {
@@ -38,15 +40,28 @@ function withFakeIds(row: Record<string, unknown>) {
 export const safeFetch: typeof fetch = async (input, init) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   const method = (init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
-  if (!isSafeMode() || method === "GET" || method === "HEAD" || !url.includes("/rest/v1/")) {
+  if (!isSafeMode() || !url.includes("/rest/v1/")) return fetch(input, init);
+
+  const u = new URL(url);
+  const path = u.pathname.split("/rest/v1/")[1] || "";
+  const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+  const wantsObject = (headers.get("Accept") || "").includes("vnd.pgrst.object");
+
+  // Lecturas: pedidos y cobros salen de los datos de demostración; el resto, de la base real.
+  if (method === "GET" || method === "HEAD") {
+    if (method === "GET" && isDemoEnabled()) {
+      const demo = await demoGet(path, u, headers, wantsObject);
+      if (demo) return demo;
+    }
     return fetch(input, init);
   }
 
-  const path = new URL(url).pathname.split("/rest/v1/")[1] || "";
-  const accept = new Headers(init?.headers).get("Accept") || "";
-  const wantsObject = accept.includes("vnd.pgrst.object");
   let body: unknown = null;
   try { body = init?.body ? JSON.parse(String(init.body)) : null; } catch { body = null; }
+  if (isDemoEnabled()) {
+    const demo = await demoMutate(path, method, u, body, headers, wantsObject);
+    if (demo) return demo;
+  }
 
   if (path.startsWith("rpc/")) {
     const fn = path.slice(4);

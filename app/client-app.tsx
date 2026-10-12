@@ -8,6 +8,7 @@ import { Toaster, toast } from "./ui/Toaster";
 import { NavPills } from "./ui/NavPills";
 import { gsap, bump, attention, exitCard, haptic, prefersReducedMotion, useFlip } from "./ui/motion";
 import { isSafeMode, safeFetch, SAFE_MODE_EVENT } from "./ui/safe-mode";
+import { DEMO_READY_EVENT, demoDeleteOrders, isDemoEnabled, resetDemo, setDemoEnabled } from "./ui/demo-store";
 import { IconTrash, IconSound, IconReceipt, IconRefresh, IconBell, IconBack, IconSearch, IconInfo, IconChart, IconList, IconWallet, IconTag, IconNote, IconBox, IconFlame, IconUsers, IconSettings, IconDownload, IconCheck, IconPlus, IconMinus, IconLogout, IconClock, IconSun, IconShare, IconCup, IconGrid, IconMove, IconSplit, IconClose } from "./ui/icons";
 
 let _db: ReturnType<typeof createClient> | null = null;
@@ -31,8 +32,9 @@ async function adminFetch(input: string, init: RequestInit): Promise<Response> {
   // modo prueba no se llaman.
   if (isSafeMode()) {
     window.dispatchEvent(new CustomEvent(SAFE_MODE_EVENT, { detail: input }));
-    let ids: unknown[] = [];
+    let ids: string[] = [];
     try { ids = JSON.parse(String(init.body||"{}")).ids || []; } catch { /* cuerpo sin ids */ }
+    if (isDemoEnabled()) await demoDeleteOrders(ids);
     return Response.json({ ok: true, deleted: ids.length, safeMode: true });
   }
   const db = getDB();
@@ -643,6 +645,8 @@ export default function App() {
     toast(`${mine?"Tu pedido está listo":"Pedido listo"}: ${who}`, "success", {
       label: "Ver",
       onClick: () => {
+        // Desde otra pantalla (modo prueba) se salta al Mesero.
+        if (profileRef.current && screensForRoles(profileRef.current.roles).includes("waiter")) goTo("waiter");
         // Solo si cambia de mesa se marca la apertura (si es la misma, el efecto no corre).
         setMesa(prev => { if (prev!==o.table_label) openPreviewOnMesaRef.current = true; return o.table_label; });
         setShowMesaPreview(true); setWaiterView("order");
@@ -652,6 +656,15 @@ export default function App() {
       try { new Notification("Listo para entregar", { body: who, icon: "/icon-192.png", tag: `listo-${o.id}` }); } catch { /* bloqueada */ }
     }
   }
+
+  // Modo prueba: no hay conexión en vivo con cocina, así que los datos de
+  // demostración avisan aquí cuando un pedido pasa a "listo".
+  useEffect(() => {
+    if (!isSafeMode()) return;
+    const onReady = (e: Event) => { notifyOrderReady((e as CustomEvent<Order>).detail); loadWaiterOrders(); };
+    window.addEventListener(DEMO_READY_EVENT, onReady);
+    return () => window.removeEventListener(DEMO_READY_EVENT, onReady);
+  }, [loadWaiterOrders]);
 
   // Realtime mesero — el mapa de mesas se actualiza solo
   useEffect(() => {
@@ -2057,7 +2070,13 @@ export default function App() {
       {offlineBanner}
       <Toaster/>
       {safeMode && (
-        <div className="cb-safe-strip">MODO PRUEBA · local — puedes tocar todo, nada se guarda en la base real</div>
+        <div className="cb-safe-strip">
+          MODO PRUEBA · {isDemoEnabled()?"pedidos de demostración":"datos reales (solo lectura)"} — nada se guarda en la base real
+          <span style={{display:"inline-flex",gap:6,marginLeft:8,flexWrap:"wrap" as const,justifyContent:"center"}}>
+            {isDemoEnabled() && <button onClick={()=>{resetDemo();window.location.reload();}} className="cb-safe-btn">Reiniciar demo</button>}
+            <button onClick={()=>{setDemoEnabled(!isDemoEnabled());window.location.reload();}} className="cb-safe-btn">{isDemoEnabled()?"Ver datos reales":"Usar demo"}</button>
+          </span>
+        </div>
       )}
 
       {/* Top bar */}
@@ -2505,7 +2524,11 @@ export default function App() {
                 const stationBusy = updating===o.id;
                 return (
                   <div key={o.id} data-flip-id={o.id} style={{...card,padding:16,
-                    border:stationStatus==="enviado"?`2px solid ${RED}`:`1px solid ${BORDER}`,
+                    // Bordes por lado: mezclar `border` con `borderLeft` hace que React pierda el color al cambiar de estado.
+                    border:"none",
+                    borderTop:stationStatus==="enviado"?`2px solid ${RED}`:`1px solid ${BORDER}`,
+                    borderRight:stationStatus==="enviado"?`2px solid ${RED}`:`1px solid ${BORDER}`,
+                    borderBottom:stationStatus==="enviado"?`2px solid ${RED}`:`1px solid ${BORDER}`,
                     borderLeft:`6px solid ${kitchenTimeColor(mins)}`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
                       <div>
