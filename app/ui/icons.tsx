@@ -45,3 +45,4 @@ export const IconCup = make(<><path d="M5 8h12v5a5 5 0 0 1-5 5h-2a5 5 0 0 1-5-5V
 export const IconGrid = make(<><rect x="4" y="4" width="7" height="7" rx="1.5" /><rect x="13" y="4" width="7" height="7" rx="1.5" /><rect x="4" y="13" width="7" height="7" rx="1.5" /><rect x="13" y="13" width="7" height="7" rx="1.5" /></>);
 export const IconMove = make(<><path d="M5 9l-3 3 3 3M19 9l3 3-3 3M2 12h20" /></>);
 export const IconSplit = make(<><path d="M12 3v18" /><path d="M5 7h4M5 12h4M15 12h4M15 17h4" /></>);
+export const IconSwap = make(<><path d="M7 4 3 8l4 4" /><path d="M3 8h13a4 4 0 0 1 4 4" /><path d="m17 20 4-4-4-4" /><path d="M21 16H8a4 4 0 0 1-4-4" /></>);

@@ -1,6 +1,8 @@
 -- ============================================================
--- FASE 16 — Seguridad de precios/cobros y liberación de mesas
--- Ejecutar DESPUÉS de Fase 15, en Supabase → SQL Editor. Idempotente.
+-- FASE 18 — Seguridad de precios/cobros y liberación de mesas
+-- (YA EJECUTADA en producción el 2026-10-11. Antes se llamaba fase16-seguridad-cobros;
+--  se renombró a 18 porque fase16/fase17 ya existían con otro contenido.)
+-- Ejecutar DESPUÉS de Fase 17, en Supabase → SQL Editor. Idempotente.
 -- NO se ejecuta desde la app. Aplicar solo cuando se suba la versión
 -- nueva a producción (la app funciona igual con o sin esta fase).
 --

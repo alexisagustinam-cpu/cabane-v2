@@ -241,7 +241,7 @@ function pendingItems(orderId: unknown) {
 
 export async function demoMutate(path: string, method: string, url: URL, body: unknown, headers: Headers, wantsObject: boolean): Promise<Response | null> {
   const rpc = path.startsWith("rpc/") ? path.slice(4) : null;
-  if (rpc ? !["pay_order", "move_order", "release_table", "record_item_payment"].includes(rpc) : !["orders", "order_items"].includes(path)) return null;
+  if (rpc ? !["pay_order", "move_order", "release_table", "record_item_payment", "swap_order_item"].includes(rpc) : !["orders", "order_items"].includes(path)) return null;
   if (!rpc && method !== "POST" && method !== "PATCH") return null;
   await ensureStore(url.origin, headers);
   const s = store!;
@@ -258,6 +258,28 @@ export async function demoMutate(path: string, method: string, url: URL, body: u
     if (Math.abs(parts.reduce((t, p) => t + p.amount, 0) - (o.total as number)) > 0.01) return json({ ok: false, error: "La suma no coincide con el total" });
     parts.forEach(p => s.payments.push({ id: uuid(), order_id: o.id, method: p.method, amount: p.amount, created_at: new Date().toISOString(), charger_name: "Prueba" }));
     o.payment_status = "paid";
+    persist();
+    return json({ ok: true });
+  }
+  if (rpc === "swap_order_item") {
+    const o = s.orders.find(x => x.id === b.p_order_id);
+    if (!o) return json({ ok: false, error: "El pedido no existe" });
+    if (o.status !== "enviado") return json({ ok: false, error: "Ya se empezó a preparar este pedido, no se puede editar" });
+    if (o.payment_status === "paid") return json({ ok: false, error: "Este pedido ya fue cobrado" });
+    if (s.allocs.some(a => a.order_id === o.id)) return json({ ok: false, error: "Este pedido ya tiene cobros parciales registrados" });
+    const item = s.items.find(i => i.id === b.p_order_item_id && i.order_id === o.id);
+    if (!item) return json({ ok: false, error: "Ese producto no pertenece a este pedido" });
+    let p: Product | undefined;
+    try {
+      const h = new Headers();
+      for (const k of ["apikey", "authorization"]) { const v = headers.get(k); if (v) h.set(k, v); }
+      const res = await fetch(`${url.origin}/rest/v1/products?id=eq.${b.p_new_product_id}&is_active=eq.true&select=id,name,category,price`, { headers: h });
+      if (res.ok) p = ((await res.json()) as Product[])[0];
+    } catch { /* sin red */ }
+    if (!p) return json({ ok: false, error: "El producto de reemplazo no existe o no está activo" });
+    Object.assign(item, { product_id: p.id, product_name: p.name, unit_price: p.price, station: stationOf(p.category), item_status: "enviado", notes: null });
+    o.total = round2(s.items.filter(i => i.order_id === o.id).reduce((t, i) => t + (i.quantity as number) * (i.unit_price as number), 0));
+    syncStatus(o.id);
     persist();
     return json({ ok: true });
   }

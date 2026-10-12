@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 const client = readFileSync(new URL("../app/client-app.tsx", import.meta.url), "utf8");
 const ordersRoute = readFileSync(new URL("../app/api/admin/orders/route.ts", import.meta.url), "utf8");
 const safeMode = readFileSync(new URL("../app/ui/safe-mode.ts", import.meta.url), "utf8");
-const fase16 = readFileSync(new URL("../supabase/fase16-seguridad-cobros.sql", import.meta.url), "utf8");
+const fase16 = readFileSync(new URL("../supabase/fase18-seguridad-cobros.sql", import.meta.url), "utf8");
 const obsolete = readFileSync(new URL("../supabase/fase12-fix-doble-cobro.sql", import.meta.url), "utf8");
 
 test("annulling a paid order checks payment_status, not the removed 'pagado' status", () => {
@@ -54,7 +54,7 @@ test("localhost safe mode blocks writes to the production database", () => {
   assert.match(client, /if \(isSafeMode\(\)\) \{/); // adminFetch no llama a /api/admin
 });
 
-test("fase 16 lets waiters release tables and makes the database own prices and totals", () => {
+test("fase 18 lets waiters release tables and makes the database own prices and totals", () => {
   assert.match(fase16, /create or replace function public\.release_table\(p_table text\)/);
   assert.match(fase16, /has_role\('waiter'\) or has_role\('cashier'\) or has_role\('admin'\)/);
   assert.match(fase16, /before insert on order_items/);

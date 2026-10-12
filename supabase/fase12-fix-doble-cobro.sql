@@ -2,7 +2,7 @@
 -- Esta versión de pay_order marca status = 'pagado', estado que
 -- fase12-pago-independiente.sql prohíbe (check orders_status_valid). Si se
 -- vuelve a correr después de esa fase, la caja deja de poder cobrar.
--- La versión vigente de pay_order está en fase16-seguridad-cobros.sql.
+-- La versión vigente de pay_order está en fase18-seguridad-cobros.sql.
 
 -- ============================================================
 -- FASE 12 — pay_order (cobro completo por método/Dividir/cobrar mesa
