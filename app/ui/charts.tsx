@@ -117,20 +117,27 @@ export function ShareBar({ parts, format }: { parts: { name: string; value: numb
 }
 
 // Ficha de indicador: valor grande + variación contra el período anterior.
-// La variación lleva flecha y texto (nunca solo color).
-export function StatTile({ label, value, delta, deltaLabel, hero = false }: {
-  label: string; value: string; delta?: number | null; deltaLabel?: string; hero?: boolean;
+// La variación lleva flecha y texto (nunca solo color). `tone` pinta la ficha
+// con un color de la marca; el texto pasa a claro y la variación va en una
+// pastilla con contraste suficiente sobre fondo oscuro.
+export function StatTile({ label, value, delta, deltaLabel, hero = false, tone }: {
+  label: string; value: string; delta?: number | null; deltaLabel?: string; hero?: boolean; tone?: string;
 }) {
   const has = delta !== null && delta !== undefined && isFinite(delta);
   const up = has && (delta as number) >= 0;
+  const dark = !!tone;
   return (
-    <div style={{ background: hero ? INK : "#fff", border: hero ? "none" : `1px solid ${GRID}`, borderRadius: 16, padding: "14px 16px", minWidth: 0 }}>
-      <p style={{ fontSize: 13, fontWeight: 800, color: hero ? "rgba(255,255,255,0.7)" : INK2, marginBottom: 6 }}>{label}</p>
-      <p style={{ fontSize: hero ? 34 : 26, fontWeight: 900, color: hero ? "#F3E6D3" : INK, lineHeight: 1.05, fontVariantNumeric: "proportional-nums" }}>{value}</p>
+    <div style={{ background: tone || "#fff", border: dark ? "none" : `1px solid ${GRID}`, borderRadius: 16, padding: "14px 16px", minWidth: 0, boxShadow: dark ? `0 6px 18px ${tone}40` : "none" }}>
+      <p style={{ fontSize: 13, fontWeight: 800, color: dark ? "rgba(255,255,255,0.75)" : INK2, marginBottom: 6 }}>{label}</p>
+      <p style={{ fontSize: hero ? 34 : 28, fontWeight: 900, color: dark ? "#FFF6EC" : INK, lineHeight: 1.05 }}>{value}</p>
       {deltaLabel && (
-        <p style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 8, fontSize: 12, fontWeight: 800, color: !has ? (hero ? "rgba(255,255,255,0.6)" : MUTED) : up ? (hero ? "#8FD694" : "#2F7D32") : (hero ? "#FF9C9C" : "#C62828") }}>
-          {has ? <>{up ? "▲" : "▼"} {Math.abs(delta as number).toFixed(0)}%</> : "—"}
-          <span style={{ fontWeight: 700, color: hero ? "rgba(255,255,255,0.6)" : MUTED }}>{deltaLabel}</span>
+        <p style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 9, flexWrap: "wrap" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 8px", borderRadius: 99, fontSize: 12, fontWeight: 900,
+            background: dark ? "rgba(255,255,255,0.14)" : has ? (up ? "rgba(47,125,50,0.1)" : "rgba(198,40,40,0.1)") : "rgba(42,26,31,0.06)",
+            color: !has ? (dark ? "rgba(255,255,255,0.7)" : MUTED) : up ? (dark ? "#A6E6AA" : "#2F7D32") : (dark ? "#FFB3B3" : "#C62828") }}>
+            {has ? <>{up ? "▲" : "▼"} {Math.abs(delta as number).toFixed(0)}%</> : "—"}
+          </span>
+          <span style={{ fontSize: 12, fontWeight: 700, color: dark ? "rgba(255,255,255,0.65)" : MUTED }}>{deltaLabel}</span>
         </p>
       )}
     </div>

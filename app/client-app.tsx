@@ -3133,9 +3133,10 @@ export default function App() {
                 const vs = adminMode==="day"?"vs día anterior":adminMode==="week"?"vs semana anterior":adminMode==="month"?"vs mes anterior":"vs período anterior";
                 return (
                   <div className="stats-kpis" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:10,marginBottom:20}}>
-                    <StatTile hero label={`Facturado · ${periodLabel()}`} value={$(rev)} delta={pct(rev,prev)} deltaLabel={vs}/>
-                    <StatTile label="Pedidos cobrados" value={String(count)} delta={pct(count,prevCount)} deltaLabel={vs}/>
-                    <StatTile label="Ticket promedio" value={$(count?rev/count:0)} delta={pct(count?rev/count:0, prevCount?prev/prevCount:0)} deltaLabel={vs}/>
+                    {/* Colores de la marca, como antes: vino · oscuro · vino-marrón */}
+                    <StatTile hero tone={RED} label={`Facturado · ${periodLabel()}`} value={$(rev)} delta={pct(rev,prev)} deltaLabel={vs}/>
+                    <StatTile tone={DARK} label="Pedidos cobrados" value={String(count)} delta={pct(count,prevCount)} deltaLabel={vs}/>
+                    <StatTile tone="#4A3540" label="Ticket promedio" value={$(count?rev/count:0)} delta={pct(count?rev/count:0, prevCount?prev/prevCount:0)} deltaLabel={vs}/>
                   </div>
                 );
               })()}

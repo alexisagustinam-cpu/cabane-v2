@@ -6,7 +6,9 @@ const client = readFileSync(new URL("../app/client-app.tsx", import.meta.url), "
 const charts = readFileSync(new URL("../app/ui/charts.tsx", import.meta.url), "utf8");
 
 test("reports lead with stat tiles that compare against the previous period", () => {
-  assert.match(client, /<StatTile hero label=\{`Facturado/);
+  assert.match(client, /<StatTile hero tone=\{RED\} label=\{`Facturado/);
+  assert.match(client, /<StatTile tone=\{DARK\} label="Pedidos cobrados"/);
+  assert.match(client, /<StatTile tone="#4A3540" label="Ticket promedio"/);
   assert.match(client, /delta=\{pct\(count,prevCount\)\}/);
 });
 
