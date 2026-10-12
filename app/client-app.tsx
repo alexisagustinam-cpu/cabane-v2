@@ -2648,8 +2648,10 @@ export default function App() {
         // Barra es un flujo rápido: entra pendiente y se marca lista en un toque.
         const stationCompletesDirectly = station==="bar";
         return (
-        <div style={{padding:16,maxWidth:1100,margin:"0 auto",width:"100%"}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap" as const,gap:10}}>
+        // Tablero de cocina/barra: usa todo el ancho de la pantalla (sin márgenes laterales)
+        // para que entren más pedidos a la vista sin tener que bajar.
+        <div className="kds-page" style={{padding:16,width:"100%"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap" as const,gap:10}}>
             <div>
               <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK,lineHeight:1.1}}>{stationLabel}</h1>
               {wakeLockOn && (
@@ -2704,8 +2706,8 @@ export default function App() {
             </div>
           )}
 
-          {/* Status counters */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:20}}>
+          {/* Status counters — en vista de columnas (pantalla grande) se ocultan: cada columna ya muestra su número */}
+          <div className={!stationCompletesDirectly && kdsView==="columnas" ? "kds-counters only-narrow" : "kds-counters"} style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:16}}>
             {[
               {label:"Nuevos",status:"enviado",count:kOrders.filter(o=>(o.order_items||[]).some(i=>i.item_status==="enviado")).length,bg:RED,fg:"#fff"},
               {label:"Preparando",status:"preparando",count:kOrders.filter(o=>(o.order_items||[]).some(i=>i.item_status==="preparando")).length,bg:GOLD,fg:DARK},
@@ -2717,8 +2719,9 @@ export default function App() {
             ))}
           </div>
 
+          <div className="kds-meta">
           {/* Leyenda de tiempos */}
-          <div style={{display:"flex",alignItems:"center",gap:12,overflowX:"auto" as const,scrollbarWidth:"none" as const,whiteSpace:"nowrap" as const,marginBottom:12,padding:"8px 12px",background:CARD,border:`1px solid ${BORDER}`,borderRadius:12}}>
+          <div className="kds-legend" style={{display:"flex",alignItems:"center",gap:12,overflowX:"auto" as const,scrollbarWidth:"none" as const,whiteSpace:"nowrap" as const,marginBottom:12,padding:"8px 12px",background:CARD,border:`1px solid ${BORDER}`,borderRadius:12}}>
             <span style={{display:"inline-flex",color:MUTED}}><IconClock size={16}/></span>
             {[
               {c:GREEN,l:"0–10 min"},
@@ -2734,7 +2737,7 @@ export default function App() {
 
           {/* Resumen del día */}
           {kSummary.length>0 && (
-            <div style={{marginBottom:16}}>
+            <div className="kds-top" style={{marginBottom:16,minWidth:0}}>
               <p style={{fontSize:11,fontWeight:800,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:6}}>Más pedido hoy</p>
               <div style={{display:"flex",gap:8,overflowX:"auto" as const,scrollbarWidth:"none" as const,paddingBottom:2}}>
                 {kSummary.map((s,i)=>(
@@ -2749,6 +2752,8 @@ export default function App() {
               </div>
             </div>
           )}
+
+          </div>
 
           {kOrders.length===0&&kLoading ? (
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(290px,1fr))",gap:12}} aria-busy="true" aria-label="Cargando pedidos">

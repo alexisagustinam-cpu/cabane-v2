@@ -8,7 +8,9 @@ const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8")
 test("kitchen board groups orders into Nuevos and Preparando keeping the original card size", () => {
   assert.match(client, /className=\{`kds-cols\$\{kdsView==="columnas"\?" is-columns":""\}`\}/);
   // Columnas lado a lado con UNA tarjeta ancha por columna (no dos angostas).
-  assert.match(css, /\.kds-cols\.is-columns \.kds-col-list \{ grid-template-columns: 1fr; \}/);
+  assert.match(css, /\.kds-cols\.is-columns \.kds-col-list \{ grid-template-columns: repeat\(auto-fill, minmax\(280px, 1fr\)\); \}/);
+  // Cocina sin márgenes laterales: usa todo el ancho de la pantalla.
+  assert.match(client, /className="kds-page" style=\{\{padding:16,width:"100%"\}\}/);
   assert.match(client, /localStorage\.setItem\("cabane_kds_view", v\)/);
   assert.match(client, /\["Nuevos",nuevos,RED\],\["Preparando",preparando,GOLD\]/);
   // Mismo ancho de tarjeta que antes: cuadrícula de mínimo 290 px.
