@@ -6,7 +6,10 @@ const client = readFileSync(new URL("../app/client-app.tsx", import.meta.url), "
 const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 
 test("kitchen board groups orders into Nuevos and Preparando keeping the original card size", () => {
-  assert.match(client, /className="kds-cols"/);
+  assert.match(client, /className=\{`kds-cols\$\{kdsView==="columnas"\?" is-columns":""\}`\}/);
+  // Columnas lado a lado con UNA tarjeta ancha por columna (no dos angostas).
+  assert.match(css, /\.kds-cols\.is-columns \.kds-col-list \{ grid-template-columns: 1fr; \}/);
+  assert.match(client, /localStorage\.setItem\("cabane_kds_view", v\)/);
   assert.match(client, /\["Nuevos",nuevos,RED\],\["Preparando",preparando,GOLD\]/);
   // Mismo ancho de tarjeta que antes: cuadrícula de mínimo 290 px.
   assert.match(css, /\.kds-grid, \.kds-col-list \{ display: grid; grid-template-columns: repeat\(auto-fill, minmax\(290px, 1fr\)\)/);
