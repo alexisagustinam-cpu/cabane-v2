@@ -5,10 +5,11 @@ import { readFileSync } from "node:fs";
 const client = readFileSync(new URL("../app/client-app.tsx", import.meta.url), "utf8");
 const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 
-test("kitchen board splits into Nuevos and Preparando columns on tablets", () => {
+test("kitchen board groups orders into Nuevos and Preparando keeping the original card size", () => {
   assert.match(client, /className="kds-cols"/);
   assert.match(client, /\["Nuevos",nuevos,RED\],\["Preparando",preparando,GOLD\]/);
-  assert.match(css, /@media \(min-width: 900px\) \{\s*\.kds-cols \{ display: grid; grid-template-columns: 1fr 1fr/);
+  // Mismo ancho de tarjeta que antes: cuadrícula de mínimo 290 px.
+  assert.match(css, /\.kds-grid, \.kds-col-list \{ display: grid; grid-template-columns: repeat\(auto-fill, minmax\(290px, 1fr\)\)/);
 });
 
 test("each kitchen line can be marked ready on its own", () => {
