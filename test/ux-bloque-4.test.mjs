@@ -23,7 +23,12 @@ test("kitchen and bar can switch to a remembered dark mode", () => {
   assert.match(client, /localStorage\.setItem\("cabane_kds_dark"/);
 });
 
-test("pull to refresh replaces Chrome's full-page reload", () => {
-  assert.match(client, /<PullToRefresh onRefresh=/);
-  assert.match(css, /overscroll-behavior-y: contain/);
+test("the browser keeps its own pull-to-refresh (no custom gesture on top)", () => {
+  assert.doesNotMatch(client, /PullToRefresh/);
+  assert.doesNotMatch(css, /overscroll-behavior-y: contain/);
+});
+
+test("audio unlock runs once and never leaves the alert muted", () => {
+  assert.match(client, /if \(!_audioUnlocked && !_audioUnlocking\)/);
+  assert.match(client, /\.finally\(\(\) => \{ a\.muted = false; a\.volume = 1; _audioUnlocking = false; \}\)/);
 });

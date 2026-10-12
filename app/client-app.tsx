@@ -12,7 +12,6 @@ import { uuid } from "./ui/uuid";
 import { receiptPdf, receiptPng, shareOrDownload, type ReceiptData } from "./ui/receipt";
 import { ColumnChart, ShareBar, StatTile, CATEGORICAL, SERIES } from "./ui/charts";
 import { Switch } from "./ui/Switch";
-import { PullToRefresh } from "./ui/PullToRefresh";
 import { DEMO_READY_EVENT, demoDeleteOrders, isDemoEnabled, resetDemo, setDemoEnabled } from "./ui/demo-store";
 import { IconTrash, IconSound, IconReceipt, IconRefresh, IconBell, IconBack, IconSearch, IconInfo, IconChart, IconList, IconWallet, IconTag, IconNote, IconBox, IconFlame, IconUsers, IconSettings, IconDownload, IconCheck, IconPlus, IconMinus, IconLogout, IconClock, IconSun, IconShare, IconCup, IconGrid, IconMove, IconSplit, IconClose, IconSwap, IconMoon } from "./ui/icons";
 
@@ -105,19 +104,28 @@ interface AdminStats { todayRevenue:number; monthRevenue:number; todayCount:numb
 // dentro del primer toque y reusado después es mucho más confiable.
 let _notifyAudio: HTMLAudioElement | null = null;
 let _audioCtx: AudioContext | null = null;
+// El desbloqueo se hace UNA sola vez por sesión. Antes corría en cada toque:
+// en algunos teléfonos se escuchaba un pedacito del aviso al tocar, y dos
+// toques seguidos podían dejar el sonido silenciado para siempre.
+let _audioUnlocked = false, _audioUnlocking = false;
 function unlockAudio() {
   try {
     if (!_notifyAudio) {
       _notifyAudio = new Audio("/notify.mp3");
       _notifyAudio.volume = 1;
     }
-    // "Calentar" el elemento con un play+pause silencioso dentro del gesto
-    // del usuario — así los play() posteriores (disparados por un evento
-    // async de realtime, sin gesto) quedan permitidos por el navegador.
-    const a = _notifyAudio;
-    const prevMuted = a.muted;
-    a.muted = true;
-    a.play().then(() => { a.pause(); a.currentTime = 0; a.muted = prevMuted; }).catch(() => { a.muted = prevMuted; });
+    if (!_audioUnlocked && !_audioUnlocking) {
+      // "Calentar" el elemento con un play+pause silencioso dentro del gesto
+      // del usuario — así los play() posteriores (disparados por un evento
+      // async de realtime, sin gesto) quedan permitidos por el navegador.
+      const a = _notifyAudio;
+      _audioUnlocking = true;
+      a.muted = true; a.volume = 0;
+      a.play()
+        .then(() => { a.pause(); a.currentTime = 0; _audioUnlocked = true; })
+        .catch(() => { /* se reintenta en el próximo toque */ })
+        .finally(() => { a.muted = false; a.volume = 1; _audioUnlocking = false; });
+    }
   } catch(_) { /* silently ignore */ }
   try {
     if (!_audioCtx) _audioCtx = new AudioContext();
@@ -132,6 +140,7 @@ function playBeep(station: Station = "kitchen") {
     if (_notifyAudio) {
       const a = _notifyAudio as HTMLAudioElement & { preservesPitch?: boolean; webkitPreservesPitch?: boolean };
       a.preservesPitch = false; a.webkitPreservesPitch = false;
+      a.muted = false; a.volume = 1;
       a.playbackRate = bar ? 1.45 : 1;
       a.currentTime = 0;
       a.play().catch(() => playSynthBeep(station));
@@ -2298,14 +2307,6 @@ export default function App() {
     <div style={{minHeight:"100dvh",background:CREAM,display:"flex",flexDirection:"column",fontFamily:FONT}}>
       {offlineBanner}
       <Toaster/>
-      {/* Deslizar hacia abajo para actualizar la pantalla actual (teléfono/tablet) */}
-      <PullToRefresh onRefresh={async()=>{
-        if (screen==="waiter") { await loadWaiterOrders(); flushOutbox(); }
-        else if (screen==="kitchen" || screen==="bar") await loadKitchen(screen==="bar"?"bar":"kitchen");
-        else if (screen==="cashier") await loadCashier();
-        else if (screen==="admin") { openAdminSection(adminSection); await new Promise(r=>setTimeout(r,500)); }
-        toast("Actualizado","info");
-      }}/>
       {safeMode && (
         <div className="cb-safe-strip">
           MODO PRUEBA · {isDemoEnabled()?"pedidos de demostración":"datos reales (solo lectura)"} — nada se guarda en la base real
