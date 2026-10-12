@@ -9,6 +9,7 @@ import { NavPills } from "./ui/NavPills";
 import { gsap, bump, attention, exitCard, haptic, prefersReducedMotion, useFlip } from "./ui/motion";
 import { isSafeMode, safeFetch, SAFE_MODE_EVENT } from "./ui/safe-mode";
 import { uuid } from "./ui/uuid";
+import { receiptPdf, receiptPng, shareOrDownload, type ReceiptData } from "./ui/receipt";
 import { DEMO_READY_EVENT, demoDeleteOrders, isDemoEnabled, resetDemo, setDemoEnabled } from "./ui/demo-store";
 import { IconTrash, IconSound, IconReceipt, IconRefresh, IconBell, IconBack, IconSearch, IconInfo, IconChart, IconList, IconWallet, IconTag, IconNote, IconBox, IconFlame, IconUsers, IconSettings, IconDownload, IconCheck, IconPlus, IconMinus, IconLogout, IconClock, IconSun, IconShare, IconCup, IconGrid, IconMove, IconSplit, IconClose, IconSwap } from "./ui/icons";
 
@@ -375,6 +376,10 @@ export default function App() {
   // Pedido de cobro pendiente de confirmar (cobro en dos pasos: método → confirmar).
   const [chargeIntent, setChargeIntent] = useState<{target:string; method:"efectivo"|"tarjeta"|"transferencia"}|null>(null);
   const [wakeLockOn, setWakeLockOn] = useState(false);
+  // Vista del tablero de cocina en pantallas grandes; cada dispositivo la recuerda.
+  const [kdsView, setKdsView] = useState<"columnas"|"lista">("columnas");
+  useEffect(() => { try { if (localStorage.getItem("cabane_kds_view")==="lista") setKdsView("lista"); } catch { /* sin storage */ } }, []);
+  const changeKdsView = (v: "columnas"|"lista") => { setKdsView(v); try { localStorage.setItem("cabane_kds_view", v); } catch { /* sin storage */ } };
   // Comprobante de un pedido (WhatsApp / impresión) y conteo de billetes del cierre.
   const [receipt, setReceipt] = useState<{order:Order; pays:Payment[]}|null>(null);
   const [cashCount, setCashCount] = useState<Record<string,number>>({});
@@ -1795,21 +1800,29 @@ export default function App() {
     setReceipt(r => r && r.order.id===order.id ? { order, pays: (data||[]) as Payment[] } : r);
   }
 
-  function receiptText(order: Order, pays: Payment[]): string {
-    const methodName: Record<string,string> = { efectivo:"Efectivo", tarjeta:"Tarjeta", transferencia:"Transferencia" };
-    const when = new Date(order.created_at).toLocaleString("es-EC",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
-    const lines = (order.order_items||[]).map(i=>`${i.quantity}× ${i.product_name}  ${$(i.quantity*i.unit_price)}`);
-    const paid = pays.reduce((s,p)=>s+p.amount,0);
-    return [
-      "*Cabane Sandwiches*",
-      `Pedido #${order.order_number} · ${order.table_label}${order.customer_name?` · ${order.customer_name}`:""}`,
-      when, "",
-      ...lines, "",
-      `*Total: ${$(order.total)}*`,
-      ...(pays.length ? pays.map(p=>`Pagado (${methodName[p.method]||p.method}): ${$(p.amount)}`) : []),
-      order.payment_status==="paid" ? "Estado: pagado" : paid>0 ? `Falta por pagar: ${$(order.total-paid)}` : "Estado: pendiente de pago",
-      "", "¡Gracias por su visita!",
-    ].join("\n");
+  function receiptData(order: Order, pays: Payment[]): ReceiptData {
+    return {
+      orderNumber: order.order_number, table: order.table_label, customer: order.customer_name,
+      date: new Date(order.created_at), total: order.total, paid: order.payment_status==="paid",
+      lines: (order.order_items||[]).map(i=>({ qty:i.quantity, name:i.product_name, amount:i.quantity*i.unit_price })),
+      payments: pays.map(p=>({ method:p.method, amount:p.amount })),
+    };
+  }
+
+  // Comprobante como imagen o PDF: abre el menú de compartir (WhatsApp) o lo descarga.
+  const [receiptBusy, setReceiptBusy] = useState<""|"png"|"pdf">("");
+  async function sendReceipt(kind: "png"|"pdf") {
+    if (!receipt) return;
+    setReceiptBusy(kind);
+    try {
+      const data = receiptData(receipt.order, receipt.pays);
+      const file = kind==="png" ? await receiptPng(data) : await receiptPdf(data);
+      const r = await shareOrDownload(file, `Comprobante pedido #${receipt.order.order_number}`);
+      if (r==="downloaded") toast(`Se descargó ${file.name} — adjúntalo en WhatsApp`, "info");
+    } catch (e) {
+      toast(`No se pudo generar el comprobante: ${(e as Error).message}`, "error");
+    }
+    setReceiptBusy("");
   }
 
   // Cobra todos los pedidos abiertos de una mesa, uno por uno
@@ -2650,6 +2663,12 @@ export default function App() {
                 style={{...btn("rgba(198,40,40,0.1)",ALERT_RED),height:44,padding:"0 14px",fontSize:14,gap:6,border:`1.5px solid ${ALERT_RED}44`}}>
                 <IconTrash size={17}/> Dar de baja
               </button>
+              {!stationCompletesDirectly && (
+                <div className="only-wide" style={{minWidth:210}}>
+                  <NavPills size="sm" stretch ariaLabel="Vista del tablero" active={kdsView} onChange={v=>{haptic();changeKdsView(v);}}
+                    items={[{key:"columnas",label:"Columnas"},{key:"lista",label:"Lista"}]}/>
+                </div>
+              )}
               <button onClick={playBeep} aria-label="Probar sonido" title="Probar sonido" style={{...btn(CREAM2,DARK),height:44,padding:"0 14px",fontSize:14,gap:6}}>
                 <IconSound size={17}/><span className="hide-sm">Probar sonido</span>
               </button>
@@ -2825,7 +2844,7 @@ export default function App() {
               <div ref={kitchenListRef} className="kds-grid">{kOrders.map(renderCard)}</div>
             );
             return (
-              <div ref={kitchenListRef} className="kds-cols">
+              <div ref={kitchenListRef} className={`kds-cols${kdsView==="columnas"?" is-columns":""}`}>
                 {([["Nuevos",nuevos,RED],["Preparando",preparando,GOLD]] as const).map(([label,list,color])=>(
                   <section key={label} className="kds-col" aria-label={label}>
                     <h2 className="kds-col-head" style={{color:DARK}}>
@@ -5003,15 +5022,22 @@ export default function App() {
         const { order, pays } = receipt;
         const methodName: Record<string,string> = { efectivo:"Efectivo", tarjeta:"Tarjeta", transferencia:"Transferencia" };
         const paid = pays.reduce((s,p)=>s+p.amount,0);
-        const text = receiptText(order, pays);
         return (
           <Sheet onClose={()=>setReceipt(null)} maxWidth={420} eyebrow="Comprobante" title={`Pedido #${order.order_number}`}
             footer={
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                <button onClick={()=>{ haptic(); window.open(`https://wa.me/?text=${encodeURIComponent(text)}`,"_blank"); }}
-                  style={{...btn("#1F7A4D","#fff"),height:52,gap:7}}><IconShare size={17}/> WhatsApp</button>
-                <button onClick={()=>window.print()} style={{...btn(DARK,"#fff"),height:52,gap:7}}><IconReceipt size={17}/> Imprimir</button>
-              </div>
+              <>
+                <button disabled={!!receiptBusy} onClick={()=>{ haptic(); sendReceipt("png"); }}
+                  style={{...btn("#1F7A4D","#fff",!!receiptBusy),width:"100%",height:54,fontSize:16,gap:8,marginBottom:8}}>
+                  <IconShare size={18}/> {receiptBusy==="png"?"Preparando imagen…":"Enviar por WhatsApp (imagen)"}
+                </button>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                  <button disabled={!!receiptBusy} onClick={()=>{ haptic(); sendReceipt("pdf"); }}
+                    style={{...btn("#fff",DARK,!!receiptBusy),height:48,gap:6,border:`1.5px solid ${BORDER}`}}>
+                    <IconDownload size={16}/> {receiptBusy==="pdf"?"Generando…":"PDF"}
+                  </button>
+                  <button onClick={()=>window.print()} style={{...btn(DARK,"#fff"),height:48,gap:6}}><IconReceipt size={16}/> Imprimir</button>
+                </div>
+              </>
             }>
             <div className="cb-receipt" style={{background:"#fff",borderRadius:14,padding:"18px 16px",border:`1px dashed ${BORDER}`,fontFamily:FONT,color:DARK}}>
               <div style={{textAlign:"center" as const,marginBottom:12}}>
@@ -5039,6 +5065,7 @@ export default function App() {
                 {order.payment_status==="paid" ? "Pagado" : paid>0 ? `Falta por pagar ${$(order.total-paid)}` : "Pendiente de pago"}
               </p>
               <p style={{fontSize:12,fontWeight:700,color:MUTED,textAlign:"center" as const,marginTop:12}}>¡Gracias por su visita!</p>
+              <p style={{fontSize:10,fontWeight:700,color:MUTED,textAlign:"center" as const,marginTop:4,opacity:0.8}}>Comprobante interno de consumo — no es factura</p>
             </div>
           </Sheet>
         );

@@ -24,9 +24,12 @@ test("orders created without internet are queued and sent later with the same cl
   assert.match(client, /client_ref:q\.clientRef/);
 });
 
-test("cashier can share or print a receipt", () => {
-  assert.match(client, /function receiptText\(order: Order, pays: Payment\[\]\)/);
-  assert.match(client, /wa\.me\/\?text=/);
+test("cashier shares the receipt as an image or PDF, or prints it", () => {
+  const receipt = readFileSync(new URL("../app/ui/receipt.ts", import.meta.url), "utf8");
+  assert.match(client, /sendReceipt\("png"\)/);
+  assert.match(client, /sendReceipt\("pdf"\)/);
+  assert.match(receipt, /nav\.share\(\{ files: \[file\], title \}\)/);
+  assert.match(receipt, /no es factura/);
   assert.match(client, /window\.print\(\)/);
   assert.match(css, /@media print/);
 });

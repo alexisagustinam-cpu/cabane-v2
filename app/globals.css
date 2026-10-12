@@ -203,3 +203,13 @@ body { font-variant-numeric: tabular-nums; }
   .cb-sheet-backdrop { background: none !important; backdrop-filter: none !important; }
 }
 @media (max-width: 420px) { .order-service-actions svg { display: none; } }
+
+/* Cocina en columnas (Nuevos | Preparando) en pantallas grandes: UNA tarjeta
+   ancha por columna para que no se vean angostas. En teléfono siempre lista. */
+.only-wide { display: none; }
+@media (min-width: 900px) {
+  .only-wide { display: block; }
+  .kds-cols.is-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  .kds-cols.is-columns .kds-col-list { grid-template-columns: 1fr; }
+  .kds-cols.is-columns .kds-col { background: rgba(255,255,255,0.32); border: 1px solid rgba(196,168,130,0.45); border-radius: 18px; padding: 14px; min-height: 50vh; }
+}
