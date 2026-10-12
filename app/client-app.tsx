@@ -12,8 +12,9 @@ import { uuid } from "./ui/uuid";
 import { receiptPdf, receiptPng, shareOrDownload, type ReceiptData } from "./ui/receipt";
 import { ColumnChart, ShareBar, StatTile, CATEGORICAL, SERIES } from "./ui/charts";
 import { Switch } from "./ui/Switch";
+import { PullToRefresh } from "./ui/PullToRefresh";
 import { DEMO_READY_EVENT, demoDeleteOrders, isDemoEnabled, resetDemo, setDemoEnabled } from "./ui/demo-store";
-import { IconTrash, IconSound, IconReceipt, IconRefresh, IconBell, IconBack, IconSearch, IconInfo, IconChart, IconList, IconWallet, IconTag, IconNote, IconBox, IconFlame, IconUsers, IconSettings, IconDownload, IconCheck, IconPlus, IconMinus, IconLogout, IconClock, IconSun, IconShare, IconCup, IconGrid, IconMove, IconSplit, IconClose, IconSwap } from "./ui/icons";
+import { IconTrash, IconSound, IconReceipt, IconRefresh, IconBell, IconBack, IconSearch, IconInfo, IconChart, IconList, IconWallet, IconTag, IconNote, IconBox, IconFlame, IconUsers, IconSettings, IconDownload, IconCheck, IconPlus, IconMinus, IconLogout, IconClock, IconSun, IconShare, IconCup, IconGrid, IconMove, IconSplit, IconClose, IconSwap, IconMoon } from "./ui/icons";
 
 let _db: ReturnType<typeof createClient> | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -78,6 +79,9 @@ interface Order { id: string; order_number: number; table_label: string; status:
 interface QueuedOrder { clientRef: string; mesa: string; tableNote: string; customerName: string; total: number; createdBy: string|null; creatorName: string|null; queuedAt: string; lastError?: string;
   items: { product_id: string; product_name: string; quantity: number; unit_price: number; station: Station; notes: string|null }[] }
 const OUTBOX_KEY = "cabane_outbox";
+// Paletas del tablero de Cocina/Barra (modo claro de siempre y modo oscuro).
+const KDS_LIGHT = { bg:"transparent", card:"#F7F0E6", cream:"#EDE0CE", cream2:"#D4BFA0", ink:"#2A1A1F", muted:"#6B5647", border:"#C4A882", totalBg:"#2A1A1F" };
+const KDS_DARK  = { bg:"#17110F", card:"#241B19", cream:"#30251F", cream2:"#3A2E27", ink:"#F3E6D3", muted:"#BBA897", border:"#4A3B33", totalBg:"#0F0B0A" };
 // Billetes y monedas en circulación en Ecuador (dólar).
 const CASH_DENOMS = [
   {key:"b100",value:100,label:"$100",kind:"billete"},{key:"b50",value:50,label:"$50",kind:"billete"},
@@ -120,28 +124,39 @@ function unlockAudio() {
     if (_audioCtx.state === "suspended") _audioCtx.resume();
   } catch(_) { /* silently ignore */ }
 }
-function playBeep() {
+// Barra suena distinto a Cocina (más agudo y doble) para que en un local
+// pequeño se sepa cuál pantalla avisó sin mirarla.
+function playBeep(station: Station = "kitchen") {
+  const bar = station === "bar";
   try {
     if (_notifyAudio) {
-      _notifyAudio.currentTime = 0;
-      _notifyAudio.play().catch(() => playSynthBeep());
+      const a = _notifyAudio as HTMLAudioElement & { preservesPitch?: boolean; webkitPreservesPitch?: boolean };
+      a.preservesPitch = false; a.webkitPreservesPitch = false;
+      a.playbackRate = bar ? 1.45 : 1;
+      a.currentTime = 0;
+      a.play().catch(() => playSynthBeep(station));
+      if (bar) setTimeout(() => { try { a.currentTime = 0; a.play().catch(() => {}); } catch { /* sin audio */ } }, 380);
       return;
     }
   } catch(_) { /* cae al sintetizado */ }
-  playSynthBeep();
+  playSynthBeep(station);
 }
-// Respaldo si el archivo de audio no cargó — mismo tono de antes
-function playSynthBeep() {
+// Respaldo si el archivo de audio no cargó — cocina: un tono; barra: dos tonos agudos
+function playSynthBeep(station: Station = "kitchen") {
   try {
     const ctx = _audioCtx;
     if (!ctx) return;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain); gain.connect(ctx.destination);
-    osc.frequency.value = 820;
-    gain.gain.setValueAtTime(0.25, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
-    osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.6);
+    const tones = station === "bar" ? [[1250, 0], [1250, 0.22]] : [[820, 0]];
+    for (const [freq, at] of tones) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = freq;
+      const t = ctx.currentTime + at;
+      gain.gain.setValueAtTime(0.25, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + (station === "bar" ? 0.18 : 0.6));
+      osc.start(t); osc.stop(t + (station === "bar" ? 0.18 : 0.6));
+    }
   } catch(_) { /* silently ignore */ }
 }
 
@@ -389,6 +404,10 @@ export default function App() {
   const [kdsView, setKdsView] = useState<"columnas"|"lista">("columnas");
   useEffect(() => { try { if (localStorage.getItem("cabane_kds_view")==="lista") setKdsView("lista"); } catch { /* sin storage */ } }, []);
   const changeKdsView = (v: "columnas"|"lista") => { setKdsView(v); try { localStorage.setItem("cabane_kds_view", v); } catch { /* sin storage */ } };
+  // Modo oscuro solo para Cocina y Barra (menos reflejo); cada dispositivo lo recuerda.
+  const [kdsDark, setKdsDark] = useState(false);
+  useEffect(() => { try { if (localStorage.getItem("cabane_kds_dark")==="1") setKdsDark(true); } catch { /* sin storage */ } }, []);
+  const toggleKdsDark = () => setKdsDark(v => { try { localStorage.setItem("cabane_kds_dark", v?"0":"1"); } catch { /* sin storage */ } return !v; });
   // Comprobante de un pedido (WhatsApp / impresión) y conteo de billetes del cierre.
   const [receipt, setReceipt] = useState<{order:Order; pays:Payment[]}|null>(null);
   const [cashCount, setCashCount] = useState<Record<string,number>>({});
@@ -831,7 +850,7 @@ export default function App() {
     const ch = getDB().channel(`${station}-rt`)
       .on("postgres_changes",{event:"INSERT",schema:"public",table:"orders"},
         (p: {new: Order}) => {
-          playBeep();
+          playBeep(station);
           if (typeof Notification!=="undefined" && Notification.permission==="granted") {
             try {
               const n = new Notification(`Nuevo pedido — ${p.new.table_label}`, {
@@ -2118,7 +2137,7 @@ export default function App() {
         // verde queda solo para "listo para entregar", que pide acción.
         const paidSeated = isPhysicalTable && allPaid && allListo;
         const stateColor = libre ? "#C9B99F" : paidSeated ? SLATE : allListo ? GREEN : GOLD;
-        const stateText  = libre ? "#A08D75" : paidSeated ? SLATE : allListo ? GREEN : "#8A6210";
+        const stateText  = libre ? "#6B5647" : paidSeated ? SLATE : allListo ? GREEN : "#7A560E";
         // Etiquetas cortas para que quepan en tarjetas de teléfono; la leyenda
         // del mapa explica cada color ("Pagada · ocupada", "Listo para entregar"…).
         const stateLabel = libre ? "Libre"
@@ -2161,10 +2180,10 @@ export default function App() {
               </span>
             </div>
 
-            <p style={{fontSize:17,fontWeight:900,color:libre?"#8F7E66":DARK,letterSpacing:"-0.01em",marginBottom:3}}>{m}</p>
+            <p style={{fontSize:17,fontWeight:900,color:libre?"#5E4A40":DARK,letterSpacing:"-0.01em",marginBottom:3}}>{m}</p>
 
             {libre ? (
-              <p className="mesa-free-sub" style={{fontSize:12,fontWeight:600,color:"#B3A184"}}>Disponible</p>
+              <p className="mesa-free-sub" style={{fontSize:12,fontWeight:700,color:"#6B5647"}}>Disponible</p>
             ) : (
               <>
                 <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8,flexWrap:"wrap" as const}}>
@@ -2279,6 +2298,14 @@ export default function App() {
     <div style={{minHeight:"100dvh",background:CREAM,display:"flex",flexDirection:"column",fontFamily:FONT}}>
       {offlineBanner}
       <Toaster/>
+      {/* Deslizar hacia abajo para actualizar la pantalla actual (teléfono/tablet) */}
+      <PullToRefresh onRefresh={async()=>{
+        if (screen==="waiter") { await loadWaiterOrders(); flushOutbox(); }
+        else if (screen==="kitchen" || screen==="bar") await loadKitchen(screen==="bar"?"bar":"kitchen");
+        else if (screen==="cashier") await loadCashier();
+        else if (screen==="admin") { openAdminSection(adminSection); await new Promise(r=>setTimeout(r,500)); }
+        toast("Actualizado","info");
+      }}/>
       {safeMode && (
         <div className="cb-safe-strip">
           MODO PRUEBA · {isDemoEnabled()?"pedidos de demostración":"datos reales (solo lectura)"} — nada se guarda en la base real
@@ -2340,10 +2367,10 @@ export default function App() {
           {outbox.length>0 && (
             <div role="status" style={{background:"#FFF6DD",border:`1.5px solid ${GOLD}`,borderRadius:14,padding:"12px 14px",marginBottom:14}}>
               <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap" as const}}>
-                <span style={{display:"flex",color:"#8A6210"}}><IconClock size={20}/></span>
+                <span style={{display:"flex",color:"#7A560E"}}><IconClock size={20}/></span>
                 <div style={{flex:1,minWidth:180}}>
                   <p style={{fontSize:14,fontWeight:900,color:"#6B4A0B"}}>{outbox.length} pedido{outbox.length>1?"s":""} sin enviar</p>
-                  <p style={{fontSize:12,fontWeight:700,color:"#8A6210"}}>{online?"Enviando…":"Sin internet — se enviarán solos al volver la conexión"}</p>
+                  <p style={{fontSize:12,fontWeight:700,color:"#7A560E"}}>{online?"Enviando…":"Sin internet — se enviarán solos al volver la conexión"}</p>
                 </div>
                 <button onClick={()=>{haptic();flushOutbox();}} disabled={!online}
                   style={{...btn(DARK,"#fff",!online),height:40,padding:"0 14px",fontSize:13,gap:6}}><IconRefresh size={15}/> Reintentar</button>
@@ -2460,7 +2487,7 @@ export default function App() {
                       const existing = mesaOrdersOf(wOrders, mesa);
                       return existing.length>0 ? (
                         <button onClick={()=>setShowMesaPreview(v=>!v)} aria-expanded={showMesaPreview}
-                          style={{fontSize:12,fontWeight:800,color:"#8A6210",background:"none",border:"none",padding:0,cursor:"pointer",fontFamily:FONT,maxWidth:"100%",whiteSpace:"nowrap" as const,overflow:"hidden",textOverflow:"ellipsis",display:"block",textAlign:"left" as const}}>
+                          style={{fontSize:12,fontWeight:800,color:"#7A560E",background:"none",border:"none",padding:0,cursor:"pointer",fontFamily:FONT,maxWidth:"100%",whiteSpace:"nowrap" as const,overflow:"hidden",textOverflow:"ellipsis",display:"block",textAlign:"left" as const}}>
                           Ya tiene {existing.length} pedido{existing.length>1?"s":""}: {existing.map(o=>o.customer_name||`#${o.order_number}`).join(", ")} {showMesaPreview?"▲":"▼"}
                         </button>
                       ) : <p style={{fontSize:12,fontWeight:700,color:MUTED}}>Mesa libre</p>;
@@ -2486,7 +2513,7 @@ export default function App() {
                                 <IconRefresh size={14}/> Repetir ronda
                               </button>
                             )}
-                            <span style={{fontSize:11,fontWeight:800,color:"#8A6210",background:"rgba(181,137,74,0.18)",borderRadius:99,padding:"2px 8px"}}>{statusLabel[o.status]||o.status}</span>
+                            <span style={{fontSize:11,fontWeight:800,color:"#7A560E",background:"rgba(181,137,74,0.18)",borderRadius:99,padding:"2px 8px"}}>{statusLabel[o.status]||o.status}</span>
                             {o.payment_status==="paid" && <span style={{fontSize:11,fontWeight:800,color:SLATE,background:"rgba(79,109,138,0.14)",borderRadius:99,padding:"2px 8px"}}>Pagado</span>}
                           </div>
                           {(o.order_items||[]).map(i=>(
@@ -2497,7 +2524,7 @@ export default function App() {
                               {o.status==="enviado" && (
                                 <button title="No hay ingredientes para este producto — cambiarlo por otro" aria-label={`Cambiar ${i.product_name} por otro producto`}
                                   onClick={()=>{setSwapTarget({order:o,item:i});setSwapProductId("");setSwapError("");}}
-                                  style={{width:38,height:38,borderRadius:10,border:"none",cursor:"pointer",background:"rgba(181,137,74,0.16)",color:"#8A6210",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                                  style={{width:38,height:38,borderRadius:10,border:"none",cursor:"pointer",background:"rgba(181,137,74,0.16)",color:"#7A560E",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
                                   <IconSwap size={17}/>
                                 </button>
                               )}
@@ -2656,13 +2683,16 @@ export default function App() {
         const stationLabel = station==="bar" ? "Barra" : "Cocina";
         // Barra es un flujo rápido: entra pendiente y se marca lista en un toque.
         const stationCompletesDirectly = station==="bar";
+        // Paleta del tablero: clara (la de siempre) u oscura.
+        const K = kdsDark ? KDS_DARK : KDS_LIGHT;
+        const kcard = kdsDark ? {...card, background:K.card, border:`1px solid ${K.border}`, boxShadow:"0 4px 18px rgba(0,0,0,0.35)"} : card;
         return (
         // Tablero de cocina/barra: usa todo el ancho de la pantalla (sin márgenes laterales)
         // para que entren más pedidos a la vista sin tener que bajar.
-        <div className="kds-page" style={{padding:16,width:"100%"}}>
+        <div className={`kds-page${kdsDark?" kds-dark":""}`} style={{padding:16,width:"100%",flex:1,background:K.bg,transition:"background-color .25s"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap" as const,gap:10}}>
             <div>
-              <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK,lineHeight:1.1}}>{stationLabel}</h1>
+              <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:K.ink,lineHeight:1.1}}>{stationLabel}</h1>
               {wakeLockOn && (
                 <p style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:12,fontWeight:800,color:GREEN,marginTop:4}}>
                   <IconSun size={14}/> Pantalla siempre encendida
@@ -2676,14 +2706,18 @@ export default function App() {
               </button>
               {!stationCompletesDirectly && (
                 <div className="only-wide" style={{minWidth:210}}>
-                  <NavPills size="sm" stretch ariaLabel="Vista del tablero" active={kdsView} onChange={v=>{haptic();changeKdsView(v);}}
+                  <NavPills size="sm" stretch tone={kdsDark?"dark":"light"} ariaLabel="Vista del tablero" active={kdsView} onChange={v=>{haptic();changeKdsView(v);}}
                     items={[{key:"columnas",label:"Columnas"},{key:"lista",label:"Lista"}]}/>
                 </div>
               )}
-              <button onClick={playBeep} aria-label="Probar sonido" title="Probar sonido" style={{...btn(CREAM2,DARK),height:44,padding:"0 14px",fontSize:14,gap:6}}>
+              <button onClick={()=>{haptic();toggleKdsDark();}} aria-pressed={kdsDark} aria-label={kdsDark?"Modo claro":"Modo oscuro"} title={kdsDark?"Modo claro":"Modo oscuro"}
+                style={{...btn(K.cream2,K.ink),height:44,width:44,padding:0}}>
+                {kdsDark?<IconSun size={18}/>:<IconMoon size={18}/>}
+              </button>
+              <button onClick={()=>playBeep(station)} aria-label="Probar sonido" title="Probar sonido" style={{...btn(K.cream2,K.ink),height:44,padding:"0 14px",fontSize:14,gap:6}}>
                 <IconSound size={17}/><span className="hide-sm">Probar sonido</span>
               </button>
-              <button onClick={()=>loadKitchen(station)} aria-label="Actualizar" style={{...btn(CREAM2,DARK),height:44,padding:"0 14px",fontSize:14,gap:6}}>
+              <button onClick={()=>loadKitchen(station)} aria-label="Actualizar" style={{...btn(K.cream2,K.ink),height:44,padding:"0 14px",fontSize:14,gap:6}}>
                 <IconRefresh size={17} style={kLoading?{animation:"spin .8s linear infinite"}:undefined}/><span className="hide-sm">Actualizar</span>
               </button>
             </div>
@@ -2692,15 +2726,15 @@ export default function App() {
           {notifPermission==="default" && (
             <div style={{marginBottom:14,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap" as const,
               background:"rgba(181,137,74,0.12)",border:`1.5px solid ${GOLD}`,borderRadius:12,padding:"12px 16px"}}>
-              <span style={{fontSize:13,fontWeight:700,color:DARK,flex:1,minWidth:200}}>
+              <span style={{fontSize:13,fontWeight:700,color:K.ink,flex:1,minWidth:200}}>
                 <IconBell size={16} style={{verticalAlign:"-3px",marginRight:6}}/>Activa las notificaciones para que avise aunque esta pestaña esté en segundo plano.
               </span>
-              <button onClick={requestNotifPermission} style={{...btn(GOLD,DARK),height:38,padding:"0 16px",fontSize:13}}>Activar</button>
+              <button onClick={requestNotifPermission} style={{...btn(GOLD,K.ink),height:38,padding:"0 16px",fontSize:13}}>Activar</button>
             </div>
           )}
           {notifPermission==="denied" && (
             <div style={{marginBottom:14,background:"#FFF6DD",border:"1.5px solid #D4A000",borderRadius:12,padding:"10px 16px"}}>
-              <span style={{fontSize:12,fontWeight:700,color:"#8A6210"}}>
+              <span style={{fontSize:12,fontWeight:700,color:"#7A560E"}}>
                 Notificaciones bloqueadas: actívalas desde el candado junto a la dirección.
               </span>
             </div>
@@ -2719,7 +2753,7 @@ export default function App() {
           <div className={!stationCompletesDirectly && kdsView==="columnas" ? "kds-counters only-narrow" : "kds-counters"} style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:16}}>
             {[
               {label:"Nuevos",status:"enviado",count:kOrders.filter(o=>(o.order_items||[]).some(i=>i.item_status==="enviado")).length,bg:RED,fg:"#fff"},
-              {label:"Preparando",status:"preparando",count:kOrders.filter(o=>(o.order_items||[]).some(i=>i.item_status==="preparando")).length,bg:GOLD,fg:DARK},
+              {label:"Preparando",status:"preparando",count:kOrders.filter(o=>(o.order_items||[]).some(i=>i.item_status==="preparando")).length,bg:GOLD,fg:"#2A1A1F"},
             ].map(({label,count,bg,fg})=>(
               <div key={label} style={{background:bg,borderRadius:14,padding:"14px 10px",textAlign:"center" as const,boxShadow:`0 4px 16px ${bg}44`}}>
                 <p style={{fontSize:36,fontWeight:900,color:fg,lineHeight:1}}>{count}</p>
@@ -2730,30 +2764,30 @@ export default function App() {
 
           <div className="kds-meta">
           {/* Leyenda de tiempos */}
-          <div className="kds-legend" style={{display:"flex",alignItems:"center",gap:12,overflowX:"auto" as const,scrollbarWidth:"none" as const,whiteSpace:"nowrap" as const,marginBottom:12,padding:"8px 12px",background:CARD,border:`1px solid ${BORDER}`,borderRadius:12}}>
-            <span style={{display:"inline-flex",color:MUTED}}><IconClock size={16}/></span>
+          <div className="kds-legend" style={{display:"flex",alignItems:"center",gap:12,overflowX:"auto" as const,scrollbarWidth:"none" as const,whiteSpace:"nowrap" as const,marginBottom:12,padding:"8px 12px",background:K.card,border:`1px solid ${K.border}`,borderRadius:12}}>
+            <span style={{display:"inline-flex",color:K.muted}}><IconClock size={16}/></span>
             {[
               {c:GREEN,l:"0–10 min"},
               {c:ORANGE,l:"10–15 min"},
               {c:ALERT_RED,l:"+15 min"},
             ].map(({c,l})=>(
-              <span key={l} style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:DARK}}>
+              <span key={l} style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:K.ink}}>
                 <span style={{width:12,height:12,borderRadius:"50%",background:c,display:"inline-block"}}/>{l}
               </span>
             ))}
-            <span style={{fontSize:12,fontWeight:600,color:MUTED}}>· parpadea a los 20</span>
+            <span style={{fontSize:12,fontWeight:600,color:K.muted}}>· parpadea a los 20</span>
           </div>
 
           {/* Resumen del día */}
           {kSummary.length>0 && (
             <div className="kds-top" style={{marginBottom:16,minWidth:0}}>
-              <p style={{fontSize:11,fontWeight:800,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:6}}>Más pedido hoy</p>
+              <p style={{fontSize:11,fontWeight:800,color:K.muted,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:6}}>Más pedido hoy</p>
               <div style={{display:"flex",gap:8,overflowX:"auto" as const,scrollbarWidth:"none" as const,paddingBottom:2}}>
                 {kSummary.map((s,i)=>(
                   <div key={s.name} style={{
                     padding:"6px 14px",borderRadius:99,fontSize:13,fontWeight:800,whiteSpace:"nowrap" as const,flexShrink:0,
-                    background:i===0?RED:i===1?GOLD:CREAM2,
-                    color:i===0?"#fff":i===1?DARK:DARK,
+                    background:i===0?RED:i===1?GOLD:K.cream2,
+                    color:i===0?"#fff":i===1?"#2A1A1F":K.ink,
                   }}>
                     {s.name} <span style={{opacity:0.7}}>×{s.qty}</span>
                   </div>
@@ -2770,8 +2804,8 @@ export default function App() {
             </div>
           ) : kOrders.length===0&&!kLoading ? (
             <div style={{textAlign:"center" as const,padding:"60px 20px"}}>
-              <p style={{fontWeight:800,fontSize:20,color:MUTED}}>Sin pedidos activos</p>
-              <p style={{fontSize:14,color:MUTED,marginTop:4}}>Los nuevos pedidos aparecerán aquí</p>
+              <p style={{fontWeight:800,fontSize:20,color:K.muted}}>Sin pedidos activos</p>
+              <p style={{fontSize:14,color:K.muted,marginTop:4}}>Los nuevos pedidos aparecerán aquí</p>
             </div>
           ) : (()=>{
             const renderCard = (o: Order) => {
@@ -2782,18 +2816,18 @@ export default function App() {
                 const stationStatus: OrderItem["item_status"] = stationItems.some(i=>i.item_status==="preparando") ? "preparando" : "enviado";
                 const stationBusy = updating===o.id;
                 return (
-                  <div key={o.id} data-flip-id={o.id} style={{...card,padding:16,
+                  <div key={o.id} data-flip-id={o.id} style={{...kcard,padding:16,
                     // Bordes por lado: mezclar `border` con `borderLeft` hace que React pierda el color al cambiar de estado.
                     border:"none",
-                    borderTop:stationStatus==="enviado"?`2px solid ${RED}`:`1px solid ${BORDER}`,
-                    borderRight:stationStatus==="enviado"?`2px solid ${RED}`:`1px solid ${BORDER}`,
-                    borderBottom:stationStatus==="enviado"?`2px solid ${RED}`:`1px solid ${BORDER}`,
+                    borderTop:stationStatus==="enviado"?`2px solid ${RED}`:`1px solid ${K.border}`,
+                    borderRight:stationStatus==="enviado"?`2px solid ${RED}`:`1px solid ${K.border}`,
+                    borderBottom:stationStatus==="enviado"?`2px solid ${RED}`:`1px solid ${K.border}`,
                     borderLeft:`6px solid ${kitchenTimeColor(mins)}`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
                       <div>
-                        <p style={{fontSize:12,fontWeight:600,color:MUTED,marginBottom:2}}>#{o.order_number} · {time} · <span style={{background:kitchenTimeColor(mins),color:"#fff",borderRadius:99,padding:"2px 10px",fontWeight:800,fontSize:11,display:"inline-block",animation:mins>=20?"pulse 1s ease infinite":undefined}}>{elapsed(o.created_at)}</span></p>
-                        <p style={{fontSize:22,fontWeight:900,color:DARK}}>{o.table_label}{o.customer_name?<span style={{fontSize:15,fontWeight:800,color:MUTED}}> · {o.customer_name}</span>:null}</p>
-                        {o.table_note && <p style={{fontSize:12,fontWeight:700,color:DARK,background:GOLD,borderRadius:6,padding:"3px 8px",marginTop:4,display:"inline-block"}}>Nota mesa: {o.table_note}</p>}
+                        <p style={{fontSize:12,fontWeight:600,color:K.muted,marginBottom:2}}>#{o.order_number} · {time} · <span style={{background:kitchenTimeColor(mins),color:"#fff",borderRadius:99,padding:"2px 10px",fontWeight:800,fontSize:11,display:"inline-block",animation:mins>=20?"pulse 1s ease infinite":undefined}}>{elapsed(o.created_at)}</span></p>
+                        <p style={{fontSize:22,fontWeight:900,color:K.ink}}>{o.table_label}{o.customer_name?<span style={{fontSize:15,fontWeight:800,color:K.muted}}> · {o.customer_name}</span>:null}</p>
+                        {o.table_note && <p style={{fontSize:12,fontWeight:700,color:K.ink,background:GOLD,borderRadius:6,padding:"3px 8px",marginTop:4,display:"inline-block"}}>Nota mesa: {o.table_note}</p>}
                       </div>
                       <span style={badge(stationStatus)}>{stationStatus==="enviado"?"Nuevo":"Preparando"}</span>
                     </div>
@@ -2801,12 +2835,12 @@ export default function App() {
                       {stationItems.map(i=>{
                         const done = i.item_status==="listo";
                         return (
-                        <div key={i.id} style={{background:done?"rgba(47,125,50,0.10)":CREAM,borderRadius:10,padding:"6px 8px 6px 6px",transition:"background-color .2s"}}>
-                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,fontSize:15,fontWeight:700,color:DARK}}>
+                        <div key={i.id} style={{background:done?"rgba(47,125,50,0.10)":K.cream,borderRadius:10,padding:"6px 8px 6px 6px",transition:"background-color .2s"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,fontSize:15,fontWeight:700,color:K.ink}}>
                             <button onClick={()=>toggleItemReady(o,i)} disabled={itemBusy===i.id} aria-pressed={done}
                               aria-label={done?`${i.product_name}: listo. Tocar para desmarcar`:`Marcar ${i.product_name} como listo`}
-                              style={{flex:1,minWidth:0,minHeight:40,display:"flex",alignItems:"center",gap:10,background:"transparent",border:"none",cursor:"pointer",textAlign:"left" as const,fontFamily:FONT,padding:0,color:DARK}}>
-                              <span className="kds-check" style={{background:done?GREEN:"#fff",borderColor:done?GREEN:BORDER,color:"#fff"}}>
+                              style={{flex:1,minWidth:0,minHeight:40,display:"flex",alignItems:"center",gap:10,background:"transparent",border:"none",cursor:"pointer",textAlign:"left" as const,fontFamily:FONT,padding:0,color:K.ink}}>
+                              <span className="kds-check" style={{background:done?GREEN:K.card,borderColor:done?GREEN:K.border,color:"#fff"}}>
                                 {done && <IconCheck size={16} strokeWidth={3}/>}
                               </span>
                               <span style={{fontSize:15,fontWeight:800,textDecoration:done?"line-through":"none",opacity:done?0.55:1}}>{i.quantity}× {i.product_name}</span>
@@ -2816,7 +2850,7 @@ export default function App() {
                               {o.status==="enviado" && (
                                 <button title="No hay ingredientes para este producto — cambiarlo por otro" aria-label={`Cambiar ${i.product_name} por otro producto`}
                                   onClick={()=>{setSwapTarget({order:o,item:i});setSwapProductId("");setSwapError("");}}
-                                  style={{width:36,height:36,borderRadius:10,border:"none",cursor:"pointer",background:"rgba(181,137,74,0.16)",color:"#8A6210",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                                  style={{width:36,height:36,borderRadius:10,border:"none",cursor:"pointer",background:"rgba(181,137,74,0.16)",color:"#7A560E",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
                                   <IconSwap size={17}/>
                                 </button>
                               )}
@@ -2838,7 +2872,7 @@ export default function App() {
                         );
                       })}
                     </div>
-                    <div style={{background:DARK,borderRadius:10,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                    <div style={{background:K.totalBg,borderRadius:10,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
                       <span style={{fontSize:13,color:"rgba(255,255,255,0.45)",fontWeight:600}}>Total pedido</span>
                       <span style={{fontSize:20,fontWeight:900,color:GOLD}}>{$(o.total)}</span>
                     </div>
@@ -2861,7 +2895,7 @@ export default function App() {
               <div ref={kitchenListRef} className={`kds-cols${kdsView==="columnas"?" is-columns":""}`}>
                 {([["Nuevos",nuevos,RED],["Preparando",preparando,GOLD]] as const).map(([label,list,color])=>(
                   <section key={label} className="kds-col" aria-label={label}>
-                    <h2 className="kds-col-head" style={{color:DARK}}>
+                    <h2 className="kds-col-head" style={{color:K.ink}}>
                       <span style={{width:10,height:10,borderRadius:"50%",background:color}}/>{label}
                       <span className="kds-count" style={{background:color}}>{list.length}</span>
                     </h2>
@@ -4348,7 +4382,7 @@ export default function App() {
             }>
 
               {closureSaved && (
-                <div style={{background:"rgba(181,137,74,0.15)",border:`1px solid ${GOLD}`,borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,fontWeight:700,color:"#8A6210"}}>
+                <div style={{background:"rgba(181,137,74,0.15)",border:`1px solid ${GOLD}`,borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13,fontWeight:700,color:"#7A560E"}}>
                   Hoy ya se hizo un cierre{closureSaved.closer_name?` (${closureSaved.closer_name})`:""}. Guardar de nuevo lo reemplaza.
                 </div>
               )}
@@ -4635,7 +4669,7 @@ export default function App() {
                       </button>
                     </>
                   ) : (
-                    <p style={{fontSize:13,fontWeight:800,color:"#8A6210"}}>Para liberar mesas falta aplicar Fase 13 en Supabase.</p>
+                    <p style={{fontSize:13,fontWeight:800,color:"#7A560E"}}>Para liberar mesas falta aplicar Fase 13 en Supabase.</p>
                   )}
                 </div>
               )}
@@ -4704,7 +4738,7 @@ export default function App() {
 
                       {!paymentSchemaReady && <p style={{fontSize:12,color:ALERT_RED,fontWeight:700,marginBottom:8,background:"#fff",borderRadius:8,padding:"6px 10px"}}>Vista previa segura: no se puede cobrar hasta aplicar Fase 12</p>}
                       {paymentSchemaReady && !isPaid && !isListo && <p style={{fontSize:12,color:MUTED,fontWeight:600,marginBottom:8}}>Preparación en curso — el cobro ya se puede registrar.</p>}
-                      {paymentSchemaReady && hasPartial && !isPaid && <p style={{fontSize:12,color:"#8A6210",fontWeight:700,marginBottom:8,background:"#FFF6DD",borderRadius:8,padding:"6px 10px"}}>Ya tiene cobros parciales por persona — sigue cobrando con &quot;Por consumo&quot; hasta cubrir todo.</p>}
+                      {paymentSchemaReady && hasPartial && !isPaid && <p style={{fontSize:12,color:"#7A560E",fontWeight:700,marginBottom:8,background:"#FFF6DD",borderRadius:8,padding:"6px 10px"}}>Ya tiene cobros parciales por persona — sigue cobrando con &quot;Por consumo&quot; hasta cubrir todo.</p>}
 
                       {isPaid ? (
                         <p style={{display:"flex",alignItems:"center",gap:6,fontSize:14,fontWeight:800,color:GREEN,marginBottom:9}}><IconCheck size={18} strokeWidth={2.6}/> Cobrado</p>
@@ -4766,7 +4800,7 @@ export default function App() {
                     style={{padding:"12px 10px",minHeight:58,borderRadius:12,fontSize:15,fontWeight:800,fontFamily:FONT,cursor:"pointer",textAlign:"left" as const,
                       background:busyMesa?"#fff":CREAM,border:`1.5px solid ${busyMesa?GOLD:BORDER}`,color:DARK,display:"flex",flexDirection:"column" as const,gap:2}}>
                     {m}
-                    <span style={{fontSize:11,fontWeight:800,color:busyMesa?"#8A6210":MUTED}}>{busyMesa?"Ocupada":"Libre"}</span>
+                    <span style={{fontSize:11,fontWeight:800,color:busyMesa?"#7A560E":MUTED}}>{busyMesa?"Ocupada":"Libre"}</span>
                   </button>
                 );
               })}
@@ -5013,7 +5047,7 @@ export default function App() {
                   <span>Pagado · {methodName[p.method]||p.method}</span><span>{$(p.amount)}</span>
                 </div>
               ))}
-              <p style={{fontSize:13,fontWeight:900,marginTop:8,color:order.payment_status==="paid"?GREEN:"#8A6210"}}>
+              <p style={{fontSize:13,fontWeight:900,marginTop:8,color:order.payment_status==="paid"?GREEN:"#7A560E"}}>
                 {order.payment_status==="paid" ? "Pagado" : paid>0 ? `Falta por pagar ${$(order.total-paid)}` : "Pendiente de pago"}
               </p>
               <p style={{fontSize:12,fontWeight:700,color:MUTED,textAlign:"center" as const,marginTop:12}}>¡Gracias por su visita!</p>

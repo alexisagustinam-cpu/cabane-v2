@@ -7,7 +7,7 @@
   --cb-cream2: #D4BFA0;
   --cb-card: #F7F0E6;
   --cb-border: #C4A882;
-  --cb-muted: #7A6555;
+  --cb-muted: #6B5647;
   --cb-gold: #B5894A;
   --cb-header-h: 56px;
 }
@@ -226,4 +226,19 @@ body { font-variant-numeric: tabular-nums; }
 @media (max-width: 999px) {
   .add-toggle { display: flex !important; }
   .add-collapsible.is-collapsed { display: none; }
+}
+
+/* Tablero de Cocina/Barra en modo oscuro */
+.kds-dark .kds-cols.is-columns .kds-col { background: rgba(255,255,255,0.03); border-color: #4A3B33; }
+.kds-dark .kds-empty { border-color: #4A3B33; color: #BBA897; }
+.kds-dark .cb-skel { background: linear-gradient(90deg, #241B19 0%, #30251F 40%, #241B19 80%); background-size: 300% 100%; }
+
+/* Deslizar para actualizar: indicador bajo la cabecera. La recarga nativa de
+   Chrome (que recargaba toda la app) queda desactivada. */
+html, body { overscroll-behavior-y: contain; }
+.cb-ptr {
+  position: fixed; z-index: 150; left: 50%; top: 64px; transform: translate(-50%, -56px); opacity: 0;
+  display: inline-flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 99px;
+  background: #2A1A1F; color: #F3E6D3; font: 800 13px 'Nunito', system-ui, sans-serif;
+  box-shadow: 0 8px 20px rgba(23,18,15,0.3); pointer-events: none; white-space: nowrap;
 }

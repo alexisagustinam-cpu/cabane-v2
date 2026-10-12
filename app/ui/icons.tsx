@@ -46,3 +46,4 @@ export const IconGrid = make(<><rect x="4" y="4" width="7" height="7" rx="1.5" /
 export const IconMove = make(<><path d="M5 9l-3 3 3 3M19 9l3 3-3 3M2 12h20" /></>);
 export const IconSplit = make(<><path d="M12 3v18" /><path d="M5 7h4M5 12h4M15 12h4M15 17h4" /></>);
 export const IconSwap = make(<><path d="M7 4 3 8l4 4" /><path d="M3 8h13a4 4 0 0 1 4 4" /><path d="m17 20 4-4-4-4" /><path d="M21 16H8a4 4 0 0 1-4-4" /></>);
+export const IconMoon = make(<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />);

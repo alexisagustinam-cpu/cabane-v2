@@ -16,7 +16,7 @@ export interface ReceiptData {
 }
 
 const W = 576, PAD = 36;
-const INK = "#2A1A1F", MUTED = "#7A6555", WINE = "#7A1E3A", GREEN = "#2F7D32", GOLD = "#8A6210";
+const INK = "#2A1A1F", MUTED = "#6B5647", WINE = "#7A1E3A", GREEN = "#2F7D32", GOLD = "#7A560E";
 const money = (n: number) => `$${n.toFixed(2)}`;
 const METHOD: Record<string, string> = { efectivo: "Efectivo", tarjeta: "Tarjeta", transferencia: "Transferencia" };
 

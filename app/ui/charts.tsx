@@ -6,7 +6,7 @@
 // texto, nunca el color de la serie.
 import { useState, type ReactNode } from "react";
 
-const INK = "#2A1A1F", INK2 = "#5E4A40", MUTED = "#7A6555", GRID = "#E6D9C6", SURFACE = "#F7F0E6";
+const INK = "#2A1A1F", INK2 = "#5E4A40", MUTED = "#6B5647", GRID = "#E6D9C6", SURFACE = "#F7F0E6";
 export const SERIES = "#7A1E3A"; // una sola serie: vino de la marca
 // Paleta de categorías validada (validate_palette.js, fondo #F7F0E6, todos los pares):
 // vino · ámbar · azul. El ámbar queda < 3:1 de contraste → siempre con su valor escrito al lado.
