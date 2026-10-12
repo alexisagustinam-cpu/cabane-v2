@@ -13,7 +13,10 @@ test("defines Barra as a first-class role and screen", () => {
 
 test("waiter validates fase 11 before creating an order and persists item station state", () => {
   assert.match(client, /ensurePreparationSchema\(\)/);
-  assert.match(client, /station:stationForCategory\(i\.category\), item_status:"enviado"/);
+  // La estación se fija al armar el pedido (también para los guardados sin internet)
+  // y cada línea entra como "enviado" al insertarse.
+  assert.match(client, /station:stationForCategory\(i\.category\)/);
+  assert.match(client, /order_items"\)\.insert\(q\.items\.map\(i=>\(\{\.\.\.i, order_id:order!\.id, item_status:"enviado"\}\)\)\)/);
   assert.match(client, /Se requiere la migración Fase 11/);
 });
 

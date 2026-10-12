@@ -179,3 +179,31 @@ body { font-variant-numeric: tabular-nums; }
   height: 26px; padding: 0 10px; border-radius: 8px; border: 1px solid rgba(255,243,214,0.5);
   background: rgba(255,243,214,0.14); color: #FFF3D6; font: 800 12px 'Nunito', system-ui, sans-serif; cursor: pointer;
 }
+
+/* ── Tablero de cocina (KDS) ─────────────────────────────── */
+.kds-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+.kds-cols { display: flex; flex-direction: column; gap: 22px; }
+.kds-col { min-width: 0; }
+.kds-col-head {
+  display: flex; align-items: center; gap: 8px; margin: 0 0 10px;
+  font: 900 15px 'Nunito', system-ui, sans-serif; text-transform: uppercase; letter-spacing: 0.08em;
+}
+.kds-count { min-width: 26px; height: 26px; padding: 0 8px; border-radius: 99px; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; }
+.kds-col-list { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.kds-empty { padding: 28px 12px; text-align: center; border: 2px dashed rgba(196,168,130,0.6); border-radius: 16px; color: var(--cb-muted); font: 700 14px 'Nunito', system-ui, sans-serif; }
+.kds-check { width: 30px; height: 30px; flex-shrink: 0; border-radius: 9px; border: 2px solid; display: inline-flex; align-items: center; justify-content: center; transition: background-color .15s, border-color .15s; }
+@media (min-width: 900px) {
+  .kds-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  .kds-col { background: rgba(255,255,255,0.35); border: 1px solid rgba(196,168,130,0.45); border-radius: 18px; padding: 14px; min-height: 60vh; }
+}
+@media (min-width: 1400px) { .kds-col-list { grid-template-columns: 1fr 1fr; } }
+
+/* Imprimir solo el comprobante (impresora térmica de 80 mm o A4) */
+@media print {
+  @page { margin: 8mm; }
+  body * { visibility: hidden !important; }
+  .cb-receipt, .cb-receipt * { visibility: visible !important; }
+  .cb-receipt { position: fixed; left: 0; top: 0; width: 76mm; border: none !important; padding: 0 !important; }
+  .cb-sheet-backdrop { background: none !important; backdrop-filter: none !important; }
+}
+@media (max-width: 420px) { .order-service-actions svg { display: none; } }

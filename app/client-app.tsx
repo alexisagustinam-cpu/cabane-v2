@@ -71,6 +71,19 @@ interface OrderItem { id: string; product_id: string; product_name: string; quan
 interface Ingredient { id: string; name: string; unit: string; stock_current: number; stock_min: number }
 interface Recipe { id: string; product_id: string; ingredient_id: string; quantity: number }
 interface Order { id: string; order_number: number; table_label: string; status: FulfillmentStatus; payment_status: PaymentStatus; total: number; created_at: string; table_released_at?: string|null; table_note?: string; customer_name?: string; order_items?: OrderItem[]; created_by?: string; creator_name?: string }
+// Pedido guardado en el teléfono cuando no había internet (se envía solo al volver).
+interface QueuedOrder { clientRef: string; mesa: string; tableNote: string; customerName: string; total: number; createdBy: string|null; creatorName: string|null; queuedAt: string; lastError?: string;
+  items: { product_id: string; product_name: string; quantity: number; unit_price: number; station: Station; notes: string|null }[] }
+const OUTBOX_KEY = "cabane_outbox";
+// Billetes y monedas en circulación en Ecuador (dólar).
+const CASH_DENOMS = [
+  {key:"b100",value:100,label:"$100",kind:"billete"},{key:"b50",value:50,label:"$50",kind:"billete"},
+  {key:"b20",value:20,label:"$20",kind:"billete"},{key:"b10",value:10,label:"$10",kind:"billete"},
+  {key:"b5",value:5,label:"$5",kind:"billete"},{key:"b1",value:1,label:"$1",kind:"billete"},
+  {key:"m1",value:1,label:"$1",kind:"moneda"},{key:"m50",value:0.5,label:"50¢",kind:"moneda"},
+  {key:"m25",value:0.25,label:"25¢",kind:"moneda"},{key:"m10",value:0.1,label:"10¢",kind:"moneda"},
+  {key:"m5",value:0.05,label:"5¢",kind:"moneda"},{key:"m1c",value:0.01,label:"1¢",kind:"moneda"},
+] as const;
 interface CartItem extends Product { qty: number; notes: string[]; customNote: string }
 interface Waste { id: string; product_name: string; quantity: number; unit_price: number; reason: string; notes?: string; reporter_name?: string; created_at: string }
 interface Expense { id: string; category: string; description: string; amount: number; expense_date: string; creator_name?: string; created_at: string }
@@ -362,6 +375,10 @@ export default function App() {
   // Pedido de cobro pendiente de confirmar (cobro en dos pasos: método → confirmar).
   const [chargeIntent, setChargeIntent] = useState<{target:string; method:"efectivo"|"tarjeta"|"transferencia"}|null>(null);
   const [wakeLockOn, setWakeLockOn] = useState(false);
+  // Comprobante de un pedido (WhatsApp / impresión) y conteo de billetes del cierre.
+  const [receipt, setReceipt] = useState<{order:Order; pays:Payment[]}|null>(null);
+  const [cashCount, setCashCount] = useState<Record<string,number>>({});
+  const [countMode, setCountMode] = useState(false);
   // Calculadora de vuelto: cuánto entregó el cliente en efectivo.
   const [cashReceived, setCashReceived] = useState("");
   useEffect(() => { setCashReceived(""); }, [chargeIntent]);
@@ -1244,6 +1261,7 @@ export default function App() {
   // ── Fase 5: cierre de caja (arqueo) ─────────────────────────────
   async function openClosure() {
     setClosureModal(true);
+    setCashCount({}); setCountMode(false);
     const { data } = await getDB().from("cash_closures").select("*").eq("closure_date", localDateStr()).maybeSingle();
     if (data) {
       setClosureSaved(data);
@@ -1445,75 +1463,173 @@ export default function App() {
     return false;
   }
 
-  async function sendToKitchen() {
-    const items = Object.values(cart) as CartItem[];
-    if (!items.length || !customerName.trim()) return;
-    if (!await ensurePreparationSchema()) return;
-    const total = items.reduce((s,i)=>s+i.price*i.qty,0);
-    // Se mantiene la misma clave mientras haya un intento pendiente para
-    // esta composición del pedido — si se edita el carrito, se descarta.
-    if (!pendingOrderRef.current) pendingOrderRef.current = uuid();
-    const clientRef = pendingOrderRef.current;
-    setSending(true);
+  // Envía un pedido (cabecera + líneas). Se usa tanto al tocar "Enviar" como
+  // al vaciar la cola de pedidos guardados sin internet. Con la misma
+  // client_ref (Fase 8) un reintento nunca duplica el pedido.
+  type SubmitResult = { ok: true; order: Order } | { ok: false; network: boolean; msg: string };
+  async function submitOrder(q: QueuedOrder): Promise<SubmitResult> {
+    const isNetwork = (m?: string) => /failed to fetch|networkerror|load failed|network|fetch|timeout/i.test(m||"");
     try {
+      const base = {table_label:q.mesa,status:"enviado",total:q.total,table_note:q.tableNote||null};
       let { data: order, error }: { data: Order|null; error: {message?:string;code?:string}|null } = await getDB().from("orders")
-        .insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null,customer_name:customerName.trim()||null,created_by:profile?.id||null,creator_name:profile?.name||null,client_ref:clientRef})
+        .insert({...base,customer_name:q.customerName||null,created_by:q.createdBy,creator_name:q.creatorName,client_ref:q.clientRef})
         .select("*, order_items(*)").single();
       // El intento anterior sí llegó a crear el pedido (se perdió la respuesta,
       // no la escritura) — usa ese pedido en vez de crear uno nuevo.
       if (error?.code === "23505") {
-        const { data: existing } = await getDB().from("orders").select("*, order_items(*)").eq("client_ref", clientRef).maybeSingle();
+        const { data: existing } = await getDB().from("orders").select("*, order_items(*)").eq("client_ref", q.clientRef).maybeSingle();
         if (existing) { order = existing; error = null; }
       }
       // Si client_ref aún no existe (fase8 sin correr), reintenta sin ella
       if (error && /client_ref/.test(error.message||"")) {
         ({ data: order, error } = await getDB().from("orders")
-          .insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null,customer_name:customerName.trim()||null,created_by:profile?.id||null,creator_name:profile?.name||null})
+          .insert({...base,customer_name:q.customerName||null,created_by:q.createdBy,creator_name:q.creatorName})
           .select("*, order_items(*)").single());
       }
       // Si created_by/creator_name aún no existen (fase7 sin correr), reintenta sin ellas
       if (error && /created_by|creator_name/.test(error.message||"")) {
         ({ data: order, error } = await getDB().from("orders")
-          .insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null,customer_name:customerName.trim()||null})
+          .insert({...base,customer_name:q.customerName||null})
           .select("*, order_items(*)").single());
       }
       // Si la columna customer_name tampoco existe (fase2-mesas.sql sin correr), reintenta sin ella
       if (error && /customer_name/.test(error.message||"")) {
-        ({ data: order, error } = await getDB().from("orders").insert({table_label:mesa,status:"enviado",total,table_note:tableNote||null}).select("*, order_items(*)").single());
+        ({ data: order, error } = await getDB().from("orders").insert(base).select("*, order_items(*)").single());
       }
-      if (error||!order) { toast("Error al enviar. Revisa tu conexión e intenta de nuevo.", "error"); pendingOrderRef.current = null; setSending(false); return; }
+      if (error||!order) return { ok:false, network:!navigator.onLine||isNetwork(error?.message), msg:error?.message||"Error al enviar" };
       // Si el pedido ya traía items (recuperado de un intento anterior), no los dupliques
       if (!order.order_items?.length) {
-        const { error: itemsError } = await getDB().from("order_items").insert(items.map((i:CartItem)=>({
-          order_id:order!.id, product_id:i.id, product_name:i.name,
-          quantity:i.qty, unit_price:i.price,
-          station:stationForCategory(i.category), item_status:"enviado",
-          notes:[...i.notes, i.customNote].filter(Boolean).join(", ")||null
-        })));
-        if (itemsError) { toast("Pedido creado pero hubo un error con los items. Avisa al admin.", "error"); setSending(false); return; }
+        const { error: itemsError } = await getDB().from("order_items").insert(q.items.map(i=>({...i, order_id:order!.id, item_status:"enviado"})));
+        if (itemsError) return { ok:false, network:!navigator.onLine||isNetwork(itemsError.message), msg:"Pedido creado pero hubo un error con los items. Avisa al admin." };
       }
-      pendingOrderRef.current = null;
+      return { ok:true, order };
+    } catch(e) {
+      // Puede haber llegado al servidor igual — la client_ref evita el duplicado al reintentar.
+      return { ok:false, network:true, msg:(e as Error)?.message||"Sin conexión" };
+    }
+  }
+
+  async function sendToKitchen() {
+    const items = Object.values(cart) as CartItem[];
+    if (!items.length || !customerName.trim()) return;
+    // Se mantiene la misma clave mientras haya un intento pendiente para
+    // esta composición del pedido — si se edita el carrito, se descarta.
+    if (!pendingOrderRef.current) pendingOrderRef.current = uuid();
+    const q: QueuedOrder = {
+      clientRef: pendingOrderRef.current, mesa, tableNote, customerName: customerName.trim(),
+      total: items.reduce((s,i)=>s+i.price*i.qty,0),
+      createdBy: profile?.id||null, creatorName: profile?.name||null, queuedAt: new Date().toISOString(),
+      items: items.map(i=>({ product_id:i.id, product_name:i.name, quantity:i.qty, unit_price:i.price,
+        station:stationForCategory(i.category), notes:[...i.notes, i.customNote].filter(Boolean).join(", ")||null })),
+    };
+    const done = () => {
       // El nombre NO se limpia — sigue siendo la misma mesa/cliente, así que
       // si el mesero manda otra ronda enseguida ya lo tiene puesto. Se
       // actualiza solo cuando realmente cambia de mesa (ver useEffect de mesa).
+      pendingOrderRef.current = null;
       setCart({}); setModal(false); setTableNote("");
-      haptic(20);
-      toast(`Pedido ${order.order_number?`#${order.order_number} `:""}enviado — ${mesa}${customerName.trim()?` · ${customerName.trim()}`:""}`);
       setWaiterView("map");
-      loadWaiterOrders();
-    } catch(_) {
-      // Puede haber llegado al servidor igual — se conserva la clave para
-      // que un reintento no cree un pedido duplicado.
-      toast("Sin conexión. Verifica internet e intenta de nuevo.", "error");
+    };
+    // Sin internet: el pedido queda guardado en el teléfono y se envía solo.
+    if (!navigator.onLine) {
+      enqueueOrder(q); done();
+      haptic([30,40,30]);
+      toast(`Sin internet: el pedido de ${q.mesa} quedó guardado y se enviará solo al volver la conexión`, "info");
+      return;
     }
+    setSending(true);
+    if (!await ensurePreparationSchema()) { setSending(false); return; }
+    const r = await submitOrder(q);
     setSending(false);
+    if (r.ok) {
+      done();
+      haptic(20);
+      toast(`Pedido ${r.order.order_number?`#${r.order.order_number} `:""}enviado — ${q.mesa}${q.customerName?` · ${q.customerName}`:""}`);
+      loadWaiterOrders();
+    } else if (r.network) {
+      enqueueOrder(q); done();
+      toast(`Se cortó la conexión: el pedido de ${q.mesa} quedó guardado y se enviará solo`, "info");
+    } else {
+      pendingOrderRef.current = null;
+      toast(r.msg, "error");
+    }
   }
+
+  // ── Cola de pedidos sin internet ───────────────────────────────
+  const [outbox, setOutbox] = useState<QueuedOrder[]>([]);
+  const flushingRef = useRef(false);
+  function saveOutbox(list: QueuedOrder[]) {
+    try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(list)); } catch { /* sin storage */ }
+    setOutbox(list);
+  }
+  function readOutbox(): QueuedOrder[] {
+    try { return JSON.parse(localStorage.getItem(OUTBOX_KEY)||"[]"); } catch { return []; }
+  }
+  function enqueueOrder(q: QueuedOrder) {
+    saveOutbox([...readOutbox().filter(x=>x.clientRef!==q.clientRef), q]);
+  }
+  function discardQueued(ref: string) {
+    askConfirm("¿Descartar este pedido guardado? No se enviará a cocina.", () => saveOutbox(readOutbox().filter(x=>x.clientRef!==ref)));
+  }
+  const flushOutbox = useCallback(async () => {
+    if (flushingRef.current || !navigator.onLine) return;
+    let list = readOutbox();
+    if (!list.length) return;
+    flushingRef.current = true;
+    let sent = 0;
+    for (const q of [...list]) {
+      const r = await submitOrder(q);
+      if (r.ok) { sent++; list = list.filter(x=>x.clientRef!==q.clientRef); saveOutbox(list); continue; }
+      if (r.network) break; // sigue sin conexión: se reintenta más tarde
+      list = list.map(x=>x.clientRef===q.clientRef?{...x,lastError:r.msg}:x); saveOutbox(list);
+      toast(`No se pudo enviar el pedido de ${q.mesa}: ${r.msg}`, "error");
+    }
+    flushingRef.current = false;
+    if (sent) {
+      haptic(20);
+      toast(sent===1?"Se envió el pedido que estaba guardado":`Se enviaron ${sent} pedidos que estaban guardados`);
+      loadWaiterOrders();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadWaiterOrders]);
+  // Al entrar, al volver la conexión y cada 20 s mientras haya pendientes.
+  useEffect(() => {
+    if (!profile) return;
+    setOutbox(readOutbox());
+    flushOutbox();
+    const onOnline = () => flushOutbox();
+    window.addEventListener("online", onOnline);
+    const id = setInterval(() => { if (readOutbox().length) flushOutbox(); }, 20000);
+    return () => { window.removeEventListener("online", onOnline); clearInterval(id); };
+  }, [profile, flushOutbox]);
 
   function cancelOrder(id: string) {
     askConfirm("¿Cancelar este pedido?", async () => {
       setKOrders((prev:Order[])=>prev.filter((o:Order)=>o.id!==id));
       await getDB().from("orders").update({status:"cancelado"}).eq("id",id);
     });
+  }
+
+  // Marcar un producto suelto como listo (o desmarcarlo). Cuando todas las
+  // líneas de la estación están listas, el pedido sale del tablero.
+  const [itemBusy, setItemBusy] = useState<string|null>(null);
+  async function toggleItemReady(order: Order, item: OrderItem) {
+    const station = item.station;
+    const next: OrderItem["item_status"] = item.item_status==="listo" ? "preparando" : "listo";
+    setItemBusy(item.id);
+    haptic(10);
+    const { error } = await getDB().from("order_items").update({item_status:next}).eq("id",item.id);
+    setItemBusy(null);
+    if (error) { toast(`No se pudo marcar ${item.product_name}: ${error.message}`, "error"); return; }
+    const updated = (order.order_items||[]).map(i=>i.id===item.id?{...i,item_status:next}:i);
+    const allDone = updated.filter(i=>i.station===station).every(i=>i.item_status==="listo");
+    if (allDone) {
+      await exitCard(kitchenListRef.current?.querySelector(`[data-flip-id="${order.id}"]`) ?? null);
+      toast(`${order.table_label}${order.customer_name?` · ${order.customer_name}`:""}: ${station==="bar"?"barra":"cocina"} lista`);
+    }
+    flipKitchen();
+    setKOrders(prev=>prev.map(o=>o.id!==order.id ? o : {...o,order_items:updated})
+      .filter(o=>(o.order_items||[]).some(i=>i.station===station && i.item_status!=="listo")));
   }
 
   async function stationOrderUpdate(orderId: string, station: Station, status: OrderItem["item_status"]) {
@@ -1671,6 +1787,29 @@ export default function App() {
   function cobrarSplit(order: Order, parts: {method:string; amount:number}[]) {
     setSplitModal(null);
     payOrder(order.id, parts);
+  }
+
+  async function openReceipt(order: Order) {
+    setReceipt({ order, pays: [] });
+    const { data } = await getDB().from("payments").select("order_id,method,amount,created_at,charger_name").eq("order_id", order.id);
+    setReceipt(r => r && r.order.id===order.id ? { order, pays: (data||[]) as Payment[] } : r);
+  }
+
+  function receiptText(order: Order, pays: Payment[]): string {
+    const methodName: Record<string,string> = { efectivo:"Efectivo", tarjeta:"Tarjeta", transferencia:"Transferencia" };
+    const when = new Date(order.created_at).toLocaleString("es-EC",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
+    const lines = (order.order_items||[]).map(i=>`${i.quantity}× ${i.product_name}  ${$(i.quantity*i.unit_price)}`);
+    const paid = pays.reduce((s,p)=>s+p.amount,0);
+    return [
+      "*Cabane Sandwiches*",
+      `Pedido #${order.order_number} · ${order.table_label}${order.customer_name?` · ${order.customer_name}`:""}`,
+      when, "",
+      ...lines, "",
+      `*Total: ${$(order.total)}*`,
+      ...(pays.length ? pays.map(p=>`Pagado (${methodName[p.method]||p.method}): ${$(p.amount)}`) : []),
+      order.payment_status==="paid" ? "Estado: pagado" : paid>0 ? `Falta por pagar: ${$(order.total-paid)}` : "Estado: pendiente de pago",
+      "", "¡Gracias por su visita!",
+    ].join("\n");
   }
 
   // Cobra todos los pedidos abiertos de una mesa, uno por uno
@@ -2036,7 +2175,7 @@ export default function App() {
 
   const offlineBanner = !online ? (
     <div style={{position:"fixed" as const,top:0,left:0,right:0,zIndex:500,background:ALERT_RED,color:"#fff",textAlign:"center" as const,padding:"8px 16px",fontSize:13,fontWeight:800}}>
-      Sin conexión a internet — los cambios no se guardarán hasta reconectar
+      Sin conexión — los pedidos nuevos quedan guardados y se envían solos al volver internet
     </div>
   ) : null;
 
@@ -2174,6 +2313,36 @@ export default function App() {
             <button onClick={()=>{haptic();loadWaiterOrders();toast("Mesas actualizadas","info");}} aria-label="Actualizar mesas" style={{...btn(CREAM2,DARK),height:44,padding:"0 14px",fontSize:14,gap:6}}><IconRefresh size={17}/><span className="hide-xs">Actualizar</span></button>
           </div>
 
+
+          {/* Pedidos guardados sin internet: se envían solos al volver la conexión */}
+          {outbox.length>0 && (
+            <div role="status" style={{background:"#FFF6DD",border:`1.5px solid ${GOLD}`,borderRadius:14,padding:"12px 14px",marginBottom:14}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap" as const}}>
+                <span style={{display:"flex",color:"#8A6210"}}><IconClock size={20}/></span>
+                <div style={{flex:1,minWidth:180}}>
+                  <p style={{fontSize:14,fontWeight:900,color:"#6B4A0B"}}>{outbox.length} pedido{outbox.length>1?"s":""} sin enviar</p>
+                  <p style={{fontSize:12,fontWeight:700,color:"#8A6210"}}>{online?"Enviando…":"Sin internet — se enviarán solos al volver la conexión"}</p>
+                </div>
+                <button onClick={()=>{haptic();flushOutbox();}} disabled={!online}
+                  style={{...btn(DARK,"#fff",!online),height:40,padding:"0 14px",fontSize:13,gap:6}}><IconRefresh size={15}/> Reintentar</button>
+              </div>
+              <div style={{display:"flex",flexDirection:"column" as const,gap:6,marginTop:10}}>
+                {outbox.map(q=>(
+                  <div key={q.clientRef} style={{display:"flex",alignItems:"center",gap:8,background:"#fff",borderRadius:10,padding:"8px 10px"}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <p style={{fontSize:13,fontWeight:800,color:DARK}}>{q.mesa}{q.customerName?` · ${q.customerName}`:""} · {$(q.total)}</p>
+                      <p style={{fontSize:12,fontWeight:600,color:MUTED,whiteSpace:"nowrap" as const,overflow:"hidden",textOverflow:"ellipsis"}}>{q.items.map(i=>`${i.quantity}× ${i.product_name}`).join(", ")}</p>
+                      {q.lastError && <p style={{fontSize:12,fontWeight:800,color:ALERT_RED}}>{q.lastError}</p>}
+                    </div>
+                    <button onClick={()=>discardQueued(q.clientRef)} aria-label={`Descartar pedido de ${q.mesa}`}
+                      style={{width:38,height:38,borderRadius:10,border:"none",background:"rgba(198,40,40,0.1)",color:ALERT_RED,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                      <IconTrash size={16}/>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <p style={{fontSize:13,fontWeight:600,color:MUTED,marginBottom:10}}>Toca una mesa para tomar el pedido. Una mesa puede tener varios pedidos, cada uno con su nombre.</p>
           {mapLegend}
@@ -2571,9 +2740,8 @@ export default function App() {
               <p style={{fontWeight:800,fontSize:20,color:MUTED}}>Sin pedidos activos</p>
               <p style={{fontSize:14,color:MUTED,marginTop:4}}>Los nuevos pedidos aparecerán aquí</p>
             </div>
-          ) : (
-            <div ref={kitchenListRef} style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(290px,1fr))",gap:12}}>
-              {kOrders.map(o=>{
+          ) : (()=>{
+            const renderCard = (o: Order) => {
                 const time=new Date(o.created_at).toLocaleTimeString("es-EC",{hour:"2-digit",minute:"2-digit"});
                 const mins=Math.floor((Date.now()-new Date(o.created_at).getTime())/60000);
                 void tick;
@@ -2597,10 +2765,19 @@ export default function App() {
                       <span style={badge(stationStatus)}>{stationStatus==="enviado"?"Nuevo":"Preparando"}</span>
                     </div>
                     <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
-                      {stationItems.map(i=>(
-                        <div key={i.id} style={{background:CREAM,borderRadius:8,padding:"8px 12px"}}>
-                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,fontSize:14,fontWeight:700,color:DARK}}>
-                            <span>{i.quantity}× {i.product_name}</span>
+                      {stationItems.map(i=>{
+                        const done = i.item_status==="listo";
+                        return (
+                        <div key={i.id} style={{background:done?"rgba(47,125,50,0.10)":CREAM,borderRadius:10,padding:"6px 8px 6px 6px",transition:"background-color .2s"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,fontSize:15,fontWeight:700,color:DARK}}>
+                            <button onClick={()=>toggleItemReady(o,i)} disabled={itemBusy===i.id} aria-pressed={done}
+                              aria-label={done?`${i.product_name}: listo. Tocar para desmarcar`:`Marcar ${i.product_name} como listo`}
+                              style={{flex:1,minWidth:0,minHeight:40,display:"flex",alignItems:"center",gap:10,background:"transparent",border:"none",cursor:"pointer",textAlign:"left" as const,fontFamily:FONT,padding:0,color:DARK}}>
+                              <span className="kds-check" style={{background:done?GREEN:"#fff",borderColor:done?GREEN:BORDER,color:"#fff"}}>
+                                {done && <IconCheck size={16} strokeWidth={3}/>}
+                              </span>
+                              <span style={{fontSize:15,fontWeight:800,textDecoration:done?"line-through":"none",opacity:done?0.55:1}}>{i.quantity}× {i.product_name}</span>
+                            </button>
                             <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
                               <span style={{fontWeight:800}}>{$(i.quantity*i.unit_price)}</span>
                               {o.status==="enviado" && (
@@ -2620,12 +2797,13 @@ export default function App() {
                             </div>
                           </div>
                           {i.notes && (
-                            <p style={{fontSize:12,fontWeight:700,color:RED,marginTop:4,display:"flex",alignItems:"center",gap:4}}>
+                            <p style={{fontSize:13,fontWeight:800,color:RED,margin:"2px 0 2px 40px",opacity:done?0.55:1}}>
                               Nota: {i.notes}
                             </p>
                           )}
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                     <div style={{background:DARK,borderRadius:10,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
                       <span style={{fontSize:13,color:"rgba(255,255,255,0.45)",fontWeight:600}}>Total pedido</span>
@@ -2638,9 +2816,29 @@ export default function App() {
                     </button>
                   </div>
                 );
-              })}
-            </div>
-          )}
+            };
+            // Cocina: dos columnas (Nuevos | Preparando) en tablet/computadora; en el
+            // teléfono, dos secciones. Barra es de un toque, así que queda en una lista.
+            const nuevos = kOrders.filter(o=>!(o.order_items||[]).some(i=>i.station===station && i.item_status==="preparando"));
+            const preparando = kOrders.filter(o=>(o.order_items||[]).some(i=>i.station===station && i.item_status==="preparando"));
+            if (stationCompletesDirectly) return (
+              <div ref={kitchenListRef} className="kds-grid">{kOrders.map(renderCard)}</div>
+            );
+            return (
+              <div ref={kitchenListRef} className="kds-cols">
+                {([["Nuevos",nuevos,RED],["Preparando",preparando,GOLD]] as const).map(([label,list,color])=>(
+                  <section key={label} className="kds-col" aria-label={label}>
+                    <h2 className="kds-col-head" style={{color:DARK}}>
+                      <span style={{width:10,height:10,borderRadius:"50%",background:color}}/>{label}
+                      <span className="kds-count" style={{background:color}}>{list.length}</span>
+                    </h2>
+                    {list.length ? <div className="kds-col-list">{list.map(renderCard)}</div>
+                      : <p className="kds-empty">{label==="Nuevos"?"Sin pedidos nuevos":"Nada en preparación"}</p>}
+                  </section>
+                ))}
+              </div>
+            );
+          })()}
         </div>
         );
       })()}
@@ -3626,6 +3824,10 @@ export default function App() {
                             {(o.order_items||[]).length===0 && <p style={{fontSize:12,color:MUTED,fontWeight:600}}>Sin detalle de items</p>}
                             {o.table_note && <p style={{fontSize:12,fontWeight:700,color:DARK,marginTop:4}}>Nota de mesa: {o.table_note}</p>}
                             <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap" as const}}>
+                              <button onClick={()=>openReceipt(o)}
+                                style={{...btn("#fff",DARK),height:40,padding:"0 14px",fontSize:13,gap:6,border:`1px solid ${BORDER}`}}>
+                                <IconReceipt size={15}/> Comprobante
+                              </button>
                               {o.payment_status==="paid" && (
                                 <button onClick={()=>annulOrder(o.id)}
                                   style={{...btn("rgba(122,30,58,0.1)",RED),height:38,padding:"0 14px",fontSize:13}}>
@@ -4192,8 +4394,42 @@ export default function App() {
                 </div>
               ))}
 
-              <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",margin:"16px 0 8px"}}>Efectivo contado en caja</p>
-              <input type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" value={closureCash}
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,margin:"16px 0 8px"}}>
+                <p style={{fontSize:11,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em"}}>Efectivo contado en caja</p>
+                <button onClick={()=>{haptic();setCountMode(v=>!v);}} aria-pressed={countMode}
+                  style={{height:34,padding:"0 12px",borderRadius:99,border:`1.5px solid ${countMode?DARK:BORDER}`,background:countMode?DARK:"transparent",color:countMode?"#fff":DARK,fontSize:12,fontWeight:800,fontFamily:FONT,cursor:"pointer"}}>
+                  {countMode?"Contando billetes":"Contar billetes"}
+                </button>
+              </div>
+              {/* Conteo por billete y moneda: el total se calcula solo */}
+              {countMode && (
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+                  {CASH_DENOMS.map(d=>{
+                    const n = cashCount[d.key]||0;
+                    const setN = (v:number) => {
+                      haptic();
+                      const next = {...cashCount,[d.key]:Math.max(0,v)};
+                      setCashCount(next);
+                      setClosureCash(CASH_DENOMS.reduce((t,x)=>t+(next[x.key]||0)*x.value,0).toFixed(2));
+                    };
+                    return (
+                      <div key={d.key} style={{display:"flex",alignItems:"center",gap:6,background:n?"#fff":CREAM,border:`1px solid ${n?GOLD:"transparent"}`,borderRadius:12,padding:"6px 6px 6px 10px"}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <p style={{fontSize:14,fontWeight:900,color:DARK,lineHeight:1.1}}>{d.label}</p>
+                          <p style={{fontSize:11,fontWeight:700,color:MUTED}}>{d.kind}{n?` · ${$(n*d.value)}`:""}</p>
+                        </div>
+                        <button onClick={()=>setN(n-1)} disabled={!n} aria-label={`Quitar ${d.kind} de ${d.label}`}
+                          style={{width:34,height:34,borderRadius:9,border:"none",background:n?CREAM2:"transparent",color:DARK,display:"flex",alignItems:"center",justifyContent:"center"}}><IconMinus size={16} strokeWidth={2.6}/></button>
+                        <span style={{minWidth:22,textAlign:"center" as const,fontSize:15,fontWeight:900}}>{n}</span>
+                        <button onClick={()=>setN(n+1)} aria-label={`Agregar ${d.kind} de ${d.label}`}
+                          style={{width:34,height:34,borderRadius:9,border:"none",background:DARK,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center"}}><IconPlus size={16} strokeWidth={2.6}/></button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <input type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" value={closureCash} readOnly={countMode}
+                aria-label="Efectivo contado"
                 onChange={e=>setClosureCash(e.target.value)}
                 style={{width:"100%",height:52,borderRadius:10,border:`1.5px solid ${BORDER}`,padding:"0 14px",fontSize:20,fontWeight:900,fontFamily:FONT,color:DARK,background:"#fff",outline:"none",marginBottom:10}}/>
 
@@ -4520,7 +4756,7 @@ export default function App() {
                             ()=>{ const m=chargeIntent.method; setChargeIntent(null); cobrar(o.id,m,o.total); }, busy)}
                         </>
                       )}
-                      <div className="order-service-actions" style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:7,marginTop:9}}>
+                      <div className="order-service-actions" style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:6,marginTop:9}}>
                         <button disabled={!canPay||busy} onClick={()=>{setChargeIntent(null);setSplitModal(o);setSplitAmounts({efectivo:"",tarjeta:"",transferencia:""});}}
                           style={{...btn("#fff",DARK,!canPay||busy),padding:"0 6px",minWidth:0,height:44,fontSize:13,gap:5,whiteSpace:"nowrap" as const,border:`1px solid ${BORDER}`}}>
                           <IconSplit size={15}/> Dividir
@@ -4532,6 +4768,10 @@ export default function App() {
                         <button disabled={busy} onClick={()=>{setChargeIntent(null);setMoveOrder(o);}}
                           style={{...btn("#fff",DARK,busy),padding:"0 6px",minWidth:0,height:44,fontSize:13,gap:5,whiteSpace:"nowrap" as const,border:`1px solid ${BORDER}`}}>
                           <IconMove size={15}/> Mover
+                        </button>
+                        <button onClick={()=>{setChargeIntent(null);openReceipt(o);}}
+                          style={{...btn("#fff",DARK),padding:"0 6px",minWidth:0,height:44,fontSize:13,gap:5,whiteSpace:"nowrap" as const,border:`1px solid ${BORDER}`}}>
+                          <IconReceipt size={15}/> Recibo
                         </button>
                       </div>
                     </div>
@@ -4758,6 +4998,52 @@ export default function App() {
                 fontSize:14,fontWeight:600,fontFamily:FONT,color:DARK,background:"#fff",outline:"none"}}/>
         </Sheet>
       )}
+      {/* ── COMPROBANTE (WhatsApp / imprimir) ───────────────────── */}
+      {receipt && (()=>{
+        const { order, pays } = receipt;
+        const methodName: Record<string,string> = { efectivo:"Efectivo", tarjeta:"Tarjeta", transferencia:"Transferencia" };
+        const paid = pays.reduce((s,p)=>s+p.amount,0);
+        const text = receiptText(order, pays);
+        return (
+          <Sheet onClose={()=>setReceipt(null)} maxWidth={420} eyebrow="Comprobante" title={`Pedido #${order.order_number}`}
+            footer={
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <button onClick={()=>{ haptic(); window.open(`https://wa.me/?text=${encodeURIComponent(text)}`,"_blank"); }}
+                  style={{...btn("#1F7A4D","#fff"),height:52,gap:7}}><IconShare size={17}/> WhatsApp</button>
+                <button onClick={()=>window.print()} style={{...btn(DARK,"#fff"),height:52,gap:7}}><IconReceipt size={17}/> Imprimir</button>
+              </div>
+            }>
+            <div className="cb-receipt" style={{background:"#fff",borderRadius:14,padding:"18px 16px",border:`1px dashed ${BORDER}`,fontFamily:FONT,color:DARK}}>
+              <div style={{textAlign:"center" as const,marginBottom:12}}>
+                <img src="/logo.jpg" alt="" style={{width:56,height:56,borderRadius:12,objectFit:"cover" as const,margin:"0 auto 6px",display:"block"}}/>
+                <p style={{fontSize:17,fontWeight:900}}>Cabane Sandwiches</p>
+                <p style={{fontSize:12,fontWeight:700,color:MUTED}}>{new Date(order.created_at).toLocaleString("es-EC",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"})}</p>
+                <p style={{fontSize:13,fontWeight:800,marginTop:4}}>{order.table_label}{order.customer_name?` · ${order.customer_name}`:""}</p>
+              </div>
+              <div style={{borderTop:`1px dashed ${BORDER}`,borderBottom:`1px dashed ${BORDER}`,padding:"10px 0",display:"flex",flexDirection:"column" as const,gap:6}}>
+                {(order.order_items||[]).map(i=>(
+                  <div key={i.id} style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:14,fontWeight:700}}>
+                    <span>{i.quantity}× {i.product_name}</span><span>{$(i.quantity*i.unit_price)}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:20,fontWeight:900,padding:"10px 0 6px"}}>
+                <span>Total</span><span>{$(order.total)}</span>
+              </div>
+              {pays.map((p,idx)=>(
+                <div key={idx} style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:700,color:MUTED}}>
+                  <span>Pagado · {methodName[p.method]||p.method}</span><span>{$(p.amount)}</span>
+                </div>
+              ))}
+              <p style={{fontSize:13,fontWeight:900,marginTop:8,color:order.payment_status==="paid"?GREEN:"#8A6210"}}>
+                {order.payment_status==="paid" ? "Pagado" : paid>0 ? `Falta por pagar ${$(order.total-paid)}` : "Pendiente de pago"}
+              </p>
+              <p style={{fontSize:12,fontWeight:700,color:MUTED,textAlign:"center" as const,marginTop:12}}>¡Gracias por su visita!</p>
+            </div>
+          </Sheet>
+        );
+      })()}
+
     </div>
   );
 }
