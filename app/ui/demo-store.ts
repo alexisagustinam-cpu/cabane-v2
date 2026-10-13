@@ -264,11 +264,13 @@ export async function demoMutate(path: string, method: string, url: URL, body: u
   if (rpc === "swap_order_item") {
     const o = s.orders.find(x => x.id === b.p_order_id);
     if (!o) return json({ ok: false, error: "El pedido no existe" });
-    if (o.status !== "enviado") return json({ ok: false, error: "Ya se empezó a preparar este pedido, no se puede editar" });
+    if (o.status !== "enviado" && o.status !== "preparando") return json({ ok: false, error: "Este pedido ya está listo o cancelado, no se puede editar" });
     if (o.payment_status === "paid") return json({ ok: false, error: "Este pedido ya fue cobrado" });
     if (s.allocs.some(a => a.order_id === o.id)) return json({ ok: false, error: "Este pedido ya tiene cobros parciales registrados" });
     const item = s.items.find(i => i.id === b.p_order_item_id && i.order_id === o.id);
     if (!item) return json({ ok: false, error: "Ese producto no pertenece a este pedido" });
+    if (item.item_status === "listo") return json({ ok: false, error: "Ese producto ya está listo, no se puede cambiar" });
+    const wasPreparing = item.item_status === "preparando";
     let p: Product | undefined;
     try {
       const h = new Headers();
@@ -281,7 +283,7 @@ export async function demoMutate(path: string, method: string, url: URL, body: u
     o.total = round2(s.items.filter(i => i.order_id === o.id).reduce((t, i) => t + (i.quantity as number) * (i.unit_price as number), 0));
     syncStatus(o.id);
     persist();
-    return json({ ok: true });
+    return json({ ok: true, in_preparation: wasPreparing });
   }
   if (rpc === "move_order") {
     const o = s.orders.find(x => x.id === b.p_order_id);

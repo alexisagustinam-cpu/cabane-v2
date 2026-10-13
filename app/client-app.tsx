@@ -1697,8 +1697,12 @@ export default function App() {
     setUpdating(null);
   }
 
-  // Fase 17: cambiar producto de un pedido ya enviado (no había ingredientes
-  // para hacer el original). No toca inventario: nunca se llegó a preparar.
+  // Fase 17/19: cambiar un producto por otro (ej. no había ingredientes o el
+  // cliente cambió de idea) mientras el pedido esté "enviado" o "preparando"
+  // y ese producto no esté listo. Si ya se estaba preparando, se recuerda
+  // registrar la pérdida en "Dar de baja" (el inventario no se toca solo).
+  const canSwap = (o: Order, i: OrderItem) =>
+    (o.status==="enviado" || o.status==="preparando") && o.payment_status!=="paid" && i.item_status!=="listo";
   async function submitSwap() {
     if (!swapTarget || !swapProductId) return;
     setSwapSaving(true); setSwapError("");
@@ -1710,6 +1714,20 @@ export default function App() {
     setSwapSaving(false);
     if (error) { setSwapError(error.message); return; }
     if (data && data.ok === false) { setSwapError(data.error || "No se pudo cambiar el producto"); return; }
+    const { order: swappedOrder, item: swappedItem } = swapTarget;
+    const newName = products.find(p=>p.id===swapProductId)?.name || "el nuevo producto";
+    const wasPreparing = data?.in_preparation ?? swappedItem.item_status==="preparando";
+    const canRegisterWaste = !!profile && (profile.roles.includes("kitchen") || profile.roles.includes("admin"));
+    if (wasPreparing) {
+      toast(`${swappedItem.product_name} cambiado por ${newName}. Si el original se desperdició, regístralo en "Dar de baja".`, "info",
+        canRegisterWaste && swappedItem.product_id ? { label:"Dar de baja", onClick:()=>{
+          setWasteOrderCtx(swappedOrder);
+          setNewWaste({product_id:swappedItem.product_id,quantity:String(swappedItem.quantity),reason:WASTE_REASONS[0],notes:"Cambiado por otro producto"});
+          setWasteModal(true);
+        } } : undefined);
+    } else {
+      toast(`${swappedItem.product_name} cambiado por ${newName}`);
+    }
     setSwapTarget(null); setSwapProductId("");
     loadWaiterOrders();
     loadKitchen("kitchen");
@@ -2522,7 +2540,7 @@ export default function App() {
                               <p style={{fontSize:13,fontWeight:600,color:MUTED,margin:0,flex:1}}>
                                 {i.quantity}× {i.product_name}{i.notes?` — ${i.notes}`:""}
                               </p>
-                              {o.status==="enviado" && (
+                              {canSwap(o,i) && (
                                 <button title="No hay ingredientes para este producto — cambiarlo por otro" aria-label={`Cambiar ${i.product_name} por otro producto`}
                                   onClick={()=>{setSwapTarget({order:o,item:i});setSwapProductId("");setSwapError("");}}
                                   style={{width:38,height:38,borderRadius:10,border:"none",cursor:"pointer",background:"rgba(181,137,74,0.16)",color:"#7A560E",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
@@ -2848,7 +2866,7 @@ export default function App() {
                             </button>
                             <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
                               <span style={{fontWeight:800}}>{$(i.quantity*i.unit_price)}</span>
-                              {o.status==="enviado" && (
+                              {canSwap(o,i) && (
                                 <button title="No hay ingredientes para este producto — cambiarlo por otro" aria-label={`Cambiar ${i.product_name} por otro producto`}
                                   onClick={()=>{setSwapTarget({order:o,item:i});setSwapProductId("");setSwapError("");}}
                                   style={{width:36,height:36,borderRadius:10,border:"none",cursor:"pointer",background:"rgba(181,137,74,0.16)",color:"#7A560E",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
@@ -4574,7 +4592,9 @@ export default function App() {
               )}
 
               <p style={{fontSize:12,fontWeight:600,color:MUTED}}>
-                No se descuenta ni repone inventario — el producto original nunca se llegó a preparar.
+                {swapTarget.item.item_status==="preparando"
+                  ? "Este producto ya se estaba preparando: el reemplazo entra como nuevo para la estación. Si el original se desperdició, regístralo luego en “Dar de baja”."
+                  : "No se descuenta ni repone inventario — el producto original nunca se llegó a preparar."}
               </p>
           </Sheet>
         );
