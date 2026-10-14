@@ -16,7 +16,7 @@ test("annulling a paid order checks payment_status, not the removed 'pagado' sta
 });
 
 test("reports exclude annulled (cancelled) orders even if they were paid", () => {
-  const stats = client.slice(client.indexOf("async function loadAdminStats"), client.indexOf("async function loadWaste"));
+  const stats = client.slice(client.indexOf("async function loadAdminStats"), client.indexOf("async function loadPrepTimes"));
   assert.equal((stats.match(/neq\("(orders\.)?status","cancelado"\)/g) || []).length, 3);
 });
 

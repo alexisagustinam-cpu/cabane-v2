@@ -6,8 +6,9 @@
 // sessionStorage: se borra al cerrar la pestaña o con "Reiniciar demo".
 
 import { uuid } from "./uuid";
+import { applyItemTimes } from "./prep-times";
 export const DEMO_READY_EVENT = "cabane:demo-order-ready";
-const KEY = "cabane_demo_v1";
+const KEY = "cabane_demo_v2"; // v2: con horas de cocina/barra (Fase 20)
 const BAR_CATEGORIES = ["Bebidas", "Cafés", "Postres"];
 
 type Row = Record<string, unknown>;
@@ -75,21 +76,50 @@ async function seed(origin: string, headers: Headers) {
   const items: Row[] = [];
   const payments: Row[] = [];
   let num = 101;
-  const add = (table: string, name: string, mins: number, lines: [Product, number, string, string?][], paid = false) => {
+  // Generador fijo (mismos datos en cada recarga) para los tiempos de ejemplo.
+  let seedN = 11;
+  const rnd = () => (seedN = (seedN * 16807) % 2147483647) / 2147483647;
+  const iso = (ms: number) => new Date(ms).toISOString();
+  // Horas de cocina/barra como las pondría el trigger de la Fase 20.
+  const times = (st: string, station: string, sentMs: number, maxMs: number) => {
+    const t = (station === "bar" ? 2 + rnd() * 8 : 5 + rnd() * 16 + (rnd() > 0.85 ? 6 : 0)) + (rnd() > 0.97 ? 70 : 0); // minutos hasta listo (a veces se olvidan de marcarlo)
+    const ready = Math.min(sentMs + t * 60000, maxMs - 30000);
+    const marked = rnd() > 0.3; // 7 de cada 10 pasan por "preparando"
+    const start = sentMs + (ready - sentMs) * (0.15 + rnd() * 0.3);
+    return {
+      sent_at: iso(sentMs),
+      started_at: st === "enviado" ? null : st === "preparando" || marked ? iso(Math.min(start, maxMs - 60000)) : null,
+      ready_at: st === "listo" ? iso(ready) : null,
+    };
+  };
+  const add = (table: string, name: string, mins: number, lines: [Product, number, string, string?][], paid = false, at?: number, released = false) => {
     const id = uuid();
+    const createdMs = at ?? now - mins * 60000;
     const its = lines.map(([p, qty, st, notes]) => ({
       id: uuid(), order_id: id, product_id: p.id, product_name: p.name, quantity: qty,
       unit_price: p.price, notes: notes ?? null, station: stationOf(p.category), item_status: st,
+      ...times(st, stationOf(p.category), createdMs, at ? createdMs + 90 * 60000 : now),
     }));
     const total = round2(its.reduce((s, i) => s + (i.quantity as number) * (i.unit_price as number), 0));
-    const created_at = new Date(now - mins * 60000).toISOString();
+    const created_at = iso(createdMs);
     orders.push({
       id, order_number: num++, table_label: table, status: statusFromItems(its), payment_status: paid ? "paid" : "pending",
-      total, created_at, table_released_at: null, table_note: null, customer_name: name, creator_name: "Mesero demo",
+      total, created_at, table_released_at: released ? created_at : null, table_note: null, customer_name: name, creator_name: "Mesero demo",
     });
     items.push(...its);
-    if (paid) payments.push({ id: uuid(), order_id: id, method: "efectivo", amount: total, created_at, charger_name: "Caja demo" });
+    if (paid) payments.push({ id: uuid(), order_id: id, method: rnd() > 0.4 ? "efectivo" : "transferencia", amount: total, created_at, charger_name: "Caja demo" });
   };
+  // Historial de 14 días (cobrado y con la mesa liberada) para Reportes y Tiempos.
+  const names = ["Andrea", "Mateo", "Valeria", "Camila", "Diego", "Paula", "Tomás", "Lucía"];
+  for (let d = 14; d >= 1; d--) {
+    const n = 8 + Math.floor(rnd() * 8);
+    for (let k = 0; k < n; k++) {
+      const day = new Date(now - d * 86400000); day.setHours(8 + Math.floor(rnd() * 12), Math.floor(rnd() * 60), 0, 0);
+      const lines: [Product, number, string][] = [[kp(Math.floor(rnd() * 9)), 1 + (rnd() > 0.8 ? 1 : 0), "listo"]];
+      if (rnd() > 0.35) lines.push([bp(Math.floor(rnd() * 9)), 1, "listo"]);
+      add(`Mesa ${1 + Math.floor(rnd() * 9)}`, names[Math.floor(rnd() * names.length)], 0, lines, true, day.getTime(), true);
+    }
+  }
   add("Mesa 1", "Ana", 3, [[kp(0), 2, "enviado", "sin cebolla"], [bp(0), 2, "enviado"]]);
   add("Mesa 3", "Carlos", 12, [[kp(1), 1, "preparando"], [bp(1), 1, "listo"]]);
   add("Mesa 3", "María", 6, [[kp(2), 1, "enviado"]]);
@@ -279,7 +309,9 @@ export async function demoMutate(path: string, method: string, url: URL, body: u
       if (res.ok) p = ((await res.json()) as Product[])[0];
     } catch { /* sin red */ }
     if (!p) return json({ ok: false, error: "El producto de reemplazo no existe o no está activo" });
+    const before = { ...item } as { item_status: string };
     Object.assign(item, { product_id: p.id, product_name: p.name, unit_price: p.price, station: stationOf(p.category), item_status: "enviado", notes: null });
+    Object.assign(item, applyItemTimes(before, item as { item_status: string }, new Date().toISOString()));
     o.total = round2(s.items.filter(i => i.order_id === o.id).reduce((t, i) => t + (i.quantity as number) * (i.unit_price as number), 0));
     syncStatus(o.id);
     persist();
@@ -328,14 +360,24 @@ export async function demoMutate(path: string, method: string, url: URL, body: u
     return respond(rows.map(r => (/order_items/.test(select) ? { ...r, order_items: [] } : r)), wantsObject, 201);
   }
   if (path === "order_items" && method === "POST") {
-    const rows = (Array.isArray(body) ? body : [b]).map((r: Row) => ({ id: uuid(), item_status: "enviado", notes: null, ...r }));
+    const now = new Date().toISOString();
+    const rows = (Array.isArray(body) ? body : [b]).map((r: Row) => {
+      const row: Row = { id: uuid(), item_status: "enviado", notes: null, ...r };
+      return { ...row, ...applyItemTimes(null, row as { item_status: string }, now) };
+    });
     s.items.push(...rows); persist();
     return respond(rows, wantsObject, 201);
   }
   if (method === "PATCH") {
     const list = path === "orders" ? s.orders : s.items;
     const hit = list.filter(r => top.every(([c, sp]) => matches(r, c, sp)));
-    hit.forEach(r => Object.assign(r, b));
+    const now = new Date().toISOString();
+    hit.forEach(r => {
+      const before = { ...r } as { item_status: string };
+      Object.assign(r, b);
+      // Igual que el trigger de la Fase 20: las horas las pone el "servidor".
+      if (path === "order_items") Object.assign(r, applyItemTimes(before, r as { item_status: string }, now));
+    });
     if (path === "order_items") new Set(hit.map(r => r.order_id)).forEach(id => syncStatus(id));
     persist();
     return respond(hit.map(r => ({ ...r })), wantsObject);

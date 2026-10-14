@@ -25,9 +25,13 @@ function niceMax(v: number): number {
 
 export interface Datum { label: string; value: number; long?: string }
 
-export function ColumnChart({ data, format, height = 170, ariaLabel, everyNthLabel = 1, emptyText = "Sin ventas en este período" }: {
+export function ColumnChart({ data, format, height = 170, ariaLabel, everyNthLabel = 1, emptyText = "Sin ventas en este período", axisFormat, valueLabel = "Facturado" }: {
   data: Datum[];
   format: (n: number) => string;
+  /** Rótulo del eje Y (por defecto dinero: "$1.2K"). */
+  axisFormat?: (n: number) => string;
+  /** Encabezado de la columna de valores en "Ver como tabla". */
+  valueLabel?: string;
   height?: number;
   ariaLabel: string;
   everyNthLabel?: number;
@@ -49,7 +53,7 @@ export function ColumnChart({ data, format, height = 170, ariaLabel, everyNthLab
         {[0, 0.5, 1].map(f => (
           <div key={f} aria-hidden="true" style={{ position: "absolute", left: 40, right: 0, top: plotH - f * plotH, height: 1, background: f === 0 ? "#CDBBA3" : GRID }}>
             <span style={{ position: "absolute", right: "100%", marginRight: 8, top: -8, fontSize: 11, fontWeight: 700, color: MUTED, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
-              {f === 0 ? "0" : `$${compact(top * f)}`}
+              {f === 0 ? "0" : axisFormat ? axisFormat(top * f) : `$${compact(top * f)}`}
             </span>
           </div>
         ))}
@@ -84,7 +88,7 @@ export function ColumnChart({ data, format, height = 170, ariaLabel, everyNthLab
           ))}
         </div>
       </div>
-      <DataTable rows={data.filter(d => d.value > 0).map(d => [d.long || d.label, format(d.value)])} head={["", "Facturado"]} />
+      <DataTable rows={data.filter(d => d.value > 0).map(d => [d.long || d.label, format(d.value)])} head={["", valueLabel]} />
     </div>
   );
 }
@@ -120,11 +124,16 @@ export function ShareBar({ parts, format }: { parts: { name: string; value: numb
 // La variación lleva flecha y texto (nunca solo color). `tone` pinta la ficha
 // con un color de la marca; el texto pasa a claro y la variación va en una
 // pastilla con contraste suficiente sobre fondo oscuro.
-export function StatTile({ label, value, delta, deltaLabel, hero = false, tone }: {
+export function StatTile({ label, value, delta, deltaLabel, hero = false, tone, goodWhenDown = false, deltaUnit = "%" }: {
   label: string; value: string; delta?: number | null; deltaLabel?: string; hero?: boolean; tone?: string;
+  /** Unidad de la variación: "%" (cambio relativo) o " pts" (diferencia entre dos porcentajes). */
+  deltaUnit?: string;
+  /** Para tiempos: que baje es bueno (flecha ▼ en verde). */
+  goodWhenDown?: boolean;
 }) {
   const has = delta !== null && delta !== undefined && isFinite(delta);
-  const up = has && (delta as number) >= 0;
+  const rising = has && (delta as number) >= 0;
+  const up = goodWhenDown ? !rising : rising; // "up" = la variación es buena (verde)
   const dark = !!tone;
   return (
     <div style={{ background: tone || "#fff", border: dark ? "none" : `1px solid ${GRID}`, borderRadius: 16, padding: "14px 16px", minWidth: 0, boxShadow: dark ? `0 6px 18px ${tone}40` : "none" }}>
@@ -135,7 +144,7 @@ export function StatTile({ label, value, delta, deltaLabel, hero = false, tone }
           <span style={{ display: "inline-flex", alignItems: "center", gap: 3, padding: "2px 8px", borderRadius: 99, fontSize: 12, fontWeight: 900,
             background: dark ? "rgba(255,255,255,0.14)" : has ? (up ? "rgba(47,125,50,0.1)" : "rgba(198,40,40,0.1)") : "rgba(42,26,31,0.06)",
             color: !has ? (dark ? "rgba(255,255,255,0.7)" : MUTED) : up ? (dark ? "#A6E6AA" : "#2F7D32") : (dark ? "#FFB3B3" : "#C62828") }}>
-            {has ? <>{up ? "▲" : "▼"} {Math.abs(delta as number).toFixed(0)}%</> : "—"}
+            {has ? <>{rising ? "▲" : "▼"} {Math.abs(delta as number).toFixed(0)}{deltaUnit}</> : "—"}
           </span>
           <span style={{ fontSize: 12, fontWeight: 700, color: dark ? "rgba(255,255,255,0.65)" : MUTED }}>{deltaLabel}</span>
         </p>

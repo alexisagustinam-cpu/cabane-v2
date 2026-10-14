@@ -12,6 +12,7 @@ import { uuid } from "./ui/uuid";
 import { receiptPdf, receiptPng, shareOrDownload, type ReceiptData } from "./ui/receipt";
 import { ColumnChart, ShareBar, StatTile, CATEGORICAL, SERIES } from "./ui/charts";
 import { Switch } from "./ui/Switch";
+import { summarize, seriesBy, fmtMin, GREEN_MAX, ORANGE_MAX, FORGOTTEN_MIN, type PrepRow } from "./ui/prep-times";
 import { DEMO_READY_EVENT, demoDeleteOrders, isDemoEnabled, resetDemo, setDemoEnabled } from "./ui/demo-store";
 import { IconTrash, IconSound, IconReceipt, IconRefresh, IconBell, IconBack, IconSearch, IconInfo, IconChart, IconList, IconWallet, IconTag, IconNote, IconBox, IconFlame, IconUsers, IconSettings, IconDownload, IconCheck, IconPlus, IconMinus, IconLogout, IconClock, IconSun, IconShare, IconCup, IconGrid, IconMove, IconSplit, IconClose, IconSwap, IconMoon } from "./ui/icons";
 
@@ -70,7 +71,7 @@ type PaymentStatus = "pending" | "paid";
 type Station = "kitchen" | "bar";
 interface Profile { id: string; name: string; roles: Role[]; email?: string }
 interface Product { id: string; name: string; category: string; price: number; description?: string }
-interface OrderItem { id: string; product_id: string; product_name: string; quantity: number; unit_price: number; notes?: string; station: Station; item_status: "enviado" | "preparando" | "listo" }
+interface OrderItem { id: string; product_id: string; product_name: string; quantity: number; unit_price: number; notes?: string; station: Station; item_status: "enviado" | "preparando" | "listo"; sent_at?: string|null; started_at?: string|null; ready_at?: string|null }
 interface Ingredient { id: string; name: string; unit: string; stock_current: number; stock_min: number }
 interface Recipe { id: string; product_id: string; ingredient_id: string; quantity: number }
 interface Order { id: string; order_number: number; table_label: string; status: FulfillmentStatus; payment_status: PaymentStatus; total: number; created_at: string; table_released_at?: string|null; table_note?: string; customer_name?: string; order_items?: OrderItem[]; created_by?: string; creator_name?: string }
@@ -303,7 +304,11 @@ export default function App() {
   const [adminStats, setAdminStats] = useState<AdminStats|null>(null);
   const [selectedReportCategory, setSelectedReportCategory] = useState<string|null>(null);
   const [adminProducts, setAdminProducts] = useState<Product[]>([]);
-  const [adminSection, setAdminSection] = useState<"stats"|"products"|"notes"|"inventory"|"users"|"waste"|"expenses"|"history"|"config">("stats");
+  const [adminSection, setAdminSection] = useState<"stats"|"times"|"products"|"notes"|"inventory"|"users"|"waste"|"expenses"|"history"|"config">("stats");
+  // Admin → Tiempos (Fase 20): horas de cocina/barra del período y del período anterior.
+  const [prepData, setPrepData] = useState<{rows:PrepRow[]; prevRows:PrepRow[]; missing:boolean; since:string|null}|null>(null);
+  const [prepLoading, setPrepLoading] = useState(false);
+  const [prepStation, setPrepStation] = useState<Station>("kitchen");
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [invTab, setInvTab] = useState<"stock"|"recetas">("stock");
@@ -1120,6 +1125,33 @@ export default function App() {
       weekdayData,
     });
     setAdminLoading(false);
+  }
+
+  // Tiempos de cocina y barra: líneas que llegaron en el período (y en el anterior, para comparar).
+  async function loadPrepTimes() {
+    setPrepLoading(true);
+    const { start, end } = adminRange();
+    const spanMs = new Date(end).getTime() - new Date(start).getTime();
+    const prevStart = new Date(new Date(start).getTime()-spanMs).toISOString();
+    const [{ data, error }, { data: first }] = await Promise.all([
+      getDB().from("order_items").select("product_name,station,quantity,sent_at,started_at,ready_at,orders!inner(status)")
+        .neq("orders.status","cancelado").gte("sent_at",prevStart).lt("sent_at",end),
+      getDB().from("order_items").select("sent_at").gte("sent_at","2000-01-01").order("sent_at").limit(1),
+    ]);
+    if (error) {
+      // Sin las columnas de la Fase 20 todavía: se avisa en vez de mostrar ceros.
+      setPrepData({ rows:[], prevRows:[], missing:/sent_at|started_at|ready_at|column/i.test(error.message||""), since:null });
+      setPrepLoading(false);
+      return;
+    }
+    const rows = ((data||[]) as (PrepRow & {orders?:unknown})[]).map(({orders: _o, ...r})=>r as PrepRow);
+    setPrepData({
+      rows: rows.filter(r=>r.sent_at && new Date(r.sent_at).getTime()>=new Date(start).getTime()),
+      prevRows: rows.filter(r=>r.sent_at && new Date(r.sent_at).getTime()<new Date(start).getTime()),
+      missing:false,
+      since: (first as {sent_at:string}[]|null)?.[0]?.sent_at || null,
+    });
+    setPrepLoading(false);
   }
 
   async function loadWaste() {
@@ -2074,6 +2106,7 @@ export default function App() {
   function openAdminSection(k: typeof adminSection) {
     setAdminSection(k);
     if (k==="stats") loadAdminStats();
+    else if (k==="times") loadPrepTimes();
     else if (k==="history") loadHistory();
     else if (k==="expenses") loadExpenses();
     else if (k==="products") loadAdminProducts();
@@ -3096,6 +3129,7 @@ export default function App() {
               onChange={k=>{ haptic(); openAdminSection(k); }}
               items={[
                 {key:"stats",label:"Reportes",icon:<IconChart size={17}/>},
+                {key:"times",label:"Tiempos",icon:<IconClock size={17}/>},
                 {key:"history",label:"Pedidos",icon:<IconList size={17}/>},
                 {key:"expenses",label:"Gastos",icon:<IconWallet size={17}/>},
                 {key:"products",label:"Productos",icon:<IconTag size={17}/>},
@@ -3746,6 +3780,133 @@ export default function App() {
                       </div>
                     )}
                   </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {adminSection==="times" && (() => {
+            const now = new Date();
+            const d = prepData;
+            const cur = d ? summarize(d.rows, now) : null, prev = d ? summarize(d.prevRows, now) : null;
+            const pct = (a:number|null|undefined, b:number|null|undefined) => a!=null && b ? ((a-b)/b)*100 : null;
+            const vs = adminMode==="day"?"vs día anterior":adminMode==="week"?"vs semana anterior":adminMode==="month"?"vs mes anterior":"vs período anterior";
+            const stName = (st:Station) => st==="kitchen"?"Cocina":"Barra";
+            const S = cur ? cur[prepStation] : null;
+            const onTimePct = (t:{onTime:number;lines:number}|undefined) => t && t.lines ? (t.onTime/t.lines)*100 : null;
+            const allOn = cur ? { onTime: cur.kitchen.onTime+cur.bar.onTime, lines: cur.kitchen.lines+cur.bar.lines } : undefined;
+            const allPrev = prev ? { onTime: prev.kitchen.onTime+prev.bar.onTime, lines: prev.kitchen.lines+prev.bar.lines } : undefined;
+            // Gráfico: por hora en "Día"; por día en el resto.
+            const { start, end } = adminRange();
+            const startMs = new Date(start).getTime();
+            const days = Math.max(1, Math.round((new Date(end).getTime()-startMs)/86400000));
+            const byHour = adminMode==="day";
+            const series = d ? seriesBy(d.rows, prepStation, byHour ? (x=>x.getHours()) : (x=>Math.floor((x.getTime()-startMs)/86400000)), byHour?24:days, now) : null;
+            const chartData = series ? (byHour
+              ? Array.from({length:24},(_,h)=>h).filter(h=>h>=7&&h<=22).map(h=>({label:`${h}h`,long:`${h}:00 a ${h+1}:00 · ${series.count[h]} medidos`,value:series.avg[h]}))
+              : series.avg.map((v,i)=>{ const dt=new Date(startMs+i*86400000); return {label:days<=7?["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"][dt.getDay()]:String(dt.getDate()),long:`${dt.toLocaleDateString("es-EC",{weekday:"long",day:"numeric",month:"short"})} · ${series.count[i]} medidos`,value:v}; })) : [];
+            const products = cur ? cur.products.filter(p=>p.station===prepStation) : [];
+            const dot = (m:number) => m<=GREEN_MAX?GREEN:m<=ORANGE_MAX?ORANGE:ALERT_RED;
+            const label = (txt:string) => <p style={{fontSize:12,fontWeight:700,color:MUTED,textTransform:"uppercase" as const,letterSpacing:"0.1em",marginBottom:12}}>{txt}</p>;
+            return (
+              <div>
+                {renderPeriodPicker(loadPrepTimes, (
+                  <button disabled={!cur} onClick={()=>{
+                    const rows: (string|number)[][] = [["Tiempos de cocina y barra", periodLabel()], []];
+                    rows.push(["Estación","Promedio (min)","Mediana (min)","Medidos","Hasta 10 min","10–15 min","Más de 15 min","Sin marcar a tiempo"]);
+                    (["kitchen","bar"] as Station[]).forEach(st=>{ const t=cur![st]; rows.push([stName(st), t.avg?.toFixed(1)??"", t.median?.toFixed(1)??"", t.lines, t.onTime, t.mid, t.late, t.forgotten]); });
+                    rows.push([], ["Producto","Estación","Unidades","Veces medido","Promedio (min)","Más rápido (min)","Más lento (min)"]);
+                    cur!.products.forEach(p=>rows.push([p.name, stName(p.station), p.units, p.lines, p.avg.toFixed(1), p.min.toFixed(1), p.max.toFixed(1)]));
+                    downloadCSV(`cabane-tiempos-${periodLabel()}.csv`, rows);
+                  }} style={{...btn(CREAM2,DARK,!cur),height:44,padding:"0 14px",fontSize:13,border:`1px solid ${BORDER}`}}>
+                    <IconDownload size={16}/> Exportar CSV
+                  </button>
+                ))}
+
+                {!d && prepLoading && (
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:10,marginBottom:20}} aria-busy="true" aria-label="Cargando tiempos">
+                    {[0,1,2].map(i=><div key={i} className="cb-skel" style={{height:96,borderRadius:14}}/>)}
+                  </div>
+                )}
+
+                {d?.missing && (
+                  <div style={{...card,padding:16,marginBottom:20,background:"#FFF6DD",border:`1.5px solid ${GOLD}`}}>
+                    <p style={{fontSize:15,fontWeight:900,color:"#6B4A0B",marginBottom:4}}>Falta activar el registro de tiempos</p>
+                    <p style={{fontSize:13,fontWeight:700,color:"#7A560E"}}>Hay que correr la Fase 20 en Supabase (archivo fase20-tiempos-preparacion.sql). Desde ese momento cada producto guarda cuándo llegó, cuándo empezaron y cuándo quedó listo.</p>
+                  </div>
+                )}
+
+                {cur && !d!.missing && (
+                  <>
+                    <div className="stats-kpis" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:10,marginBottom:10}}>
+                      <StatTile hero tone={RED} goodWhenDown label="Cocina · promedio hasta listo" value={fmtMin(cur.kitchen.avg)} delta={pct(cur.kitchen.avg, prev?.kitchen.avg)} deltaLabel={vs}/>
+                      <StatTile tone={DARK} goodWhenDown label="Barra · promedio hasta listo" value={fmtMin(cur.bar.avg)} delta={pct(cur.bar.avg, prev?.bar.avg)} deltaLabel={vs}/>
+                      <StatTile tone="#4A3540" label={`A tiempo (hasta ${GREEN_MAX} min)`} value={onTimePct(allOn)==null?"—":`${Math.round(onTimePct(allOn)!)}%`} deltaUnit=" pts"
+                        delta={onTimePct(allOn)!=null && onTimePct(allPrev)!=null ? onTimePct(allOn)!-onTimePct(allPrev)! : null} deltaLabel={vs}/>
+                    </div>
+                    <p style={{fontSize:12,fontWeight:700,color:MUTED,marginBottom:18}}>
+                      Tiempo desde que el pedido llega a la tablet hasta que lo marcan listo.
+                      {d!.since ? ` Se mide desde el ${new Date(d!.since).toLocaleDateString("es-EC",{day:"numeric",month:"long"})}.` : " Todavía no hay productos medidos."}
+                    </p>
+
+                    <div style={{maxWidth:320,marginBottom:14}}>
+                      <NavPills size="sm" stretch ariaLabel="Estación" active={prepStation} onChange={k=>{haptic();setPrepStation(k);}}
+                        items={[{key:"kitchen",label:"Cocina"},{key:"bar",label:"Barra"}]}/>
+                    </div>
+
+                    <div className="stats-2col">
+                      <div className="stats-left"><div className="stats-left-core">
+                        {/* Cómo salieron: mismos colores que ve el personal en la tablet */}
+                        <div style={{...card,padding:16,marginBottom:20}}>
+                          {label(`${stName(prepStation)} · cómo salieron`)}
+                          <ShareBar format={n=>`${n}`} parts={[
+                            {name:`Hasta ${GREEN_MAX} min`,value:S!.onTime,color:GREEN},
+                            {name:`${GREEN_MAX}–${ORANGE_MAX} min`,value:S!.mid,color:ORANGE},
+                            {name:`Más de ${ORANGE_MAX} min`,value:S!.late,color:ALERT_RED},
+                          ]}/>
+                          {S!.waitAvg!=null && S!.workAvg!=null && (
+                            <p style={{fontSize:13,fontWeight:700,color:DARK,marginTop:14,lineHeight:1.45}}>
+                              Tardan <b>{fmtMin(S!.waitAvg)}</b> en empezarlo y <b>{fmtMin(S!.workAvg)}</b> en prepararlo.
+                            </p>
+                          )}
+                          {S!.forgotten>0 && (
+                            <p style={{fontSize:12,fontWeight:700,color:"#7A560E",background:"#FFF6DD",borderRadius:8,padding:"6px 10px",marginTop:12}}>
+                              {S!.forgotten} {S!.forgotten===1?"producto quedó":"productos quedaron"} sin marcar listo a tiempo (más de {FORGOTTEN_MIN} min). No cuentan en el promedio.
+                            </p>
+                          )}
+                        </div>
+
+                        <div style={{...card,padding:16,marginBottom:20}}>
+                          {label(`${stName(prepStation)} · promedio ${byHour?"por hora":"por día"}`)}
+                          <ColumnChart ariaLabel={`Promedio de ${stName(prepStation)} ${byHour?"por hora":"por día"}`} format={fmtMin} axisFormat={n=>`${Math.round(n)}m`} valueLabel="Promedio"
+                            everyNthLabel={chartData.length>16?2:1} emptyText="Sin productos medidos en este período" data={chartData}/>
+                        </div>
+                      </div></div>
+
+                      {/* Por producto: del más lento al más rápido */}
+                      <div style={{...card,padding:16,marginBottom:20}}>
+                        {label(`${stName(prepStation)} · por producto (del más lento)`)}
+                        {products.length===0 ? (
+                          <p style={{fontSize:13,color:MUTED,fontWeight:600}}>Sin productos medidos en este período</p>
+                        ) : (
+                          <div style={{display:"flex",flexDirection:"column" as const}}>
+                            {products.map(p=>(
+                              <div key={p.name} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 0",borderBottom:`1px solid ${BORDER}44`}}>
+                                <span aria-hidden="true" style={{width:10,height:10,borderRadius:"50%",background:dot(p.avg),flexShrink:0}}/>
+                                <div style={{flex:1,minWidth:0}}>
+                                  <p style={{fontSize:14,fontWeight:800,color:DARK}}>{p.name}</p>
+                                  <p style={{fontSize:12,fontWeight:700,color:MUTED}}>
+                                    {p.units} {p.units===1?"ud":"uds"} · más rápido {fmtMin(p.min)} · más lento {fmtMin(p.max)}{p.lines<3?" · pocas mediciones":""}
+                                  </p>
+                                </div>
+                                <span style={{fontSize:18,fontWeight:900,color:DARK,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap" as const}}>{fmtMin(p.avg)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </>
                 )}
               </div>
             );
