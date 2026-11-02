@@ -233,3 +233,149 @@ body { font-variant-numeric: tabular-nums; }
 .kds-dark .kds-empty { border-color: #4A3B33; color: #BBA897; }
 .kds-dark .cb-skel { background: linear-gradient(90deg, #241B19 0%, #30251F 40%, #241B19 80%); background-size: 300% 100%; }
 
+
+/* ══ Temas por época (ver app/tema/tema.tsx) ══════════════════════════
+   Todo cuelga de html[data-tema]: sin tema, nada de esto aplica y Cabane
+   se ve como siempre. --tema-acento, --tema-icono y --tema-guirnalda los
+   pone TemaProvider con lo que manda el CRM. */
+@keyframes tema-caer {
+  0% { transform: translate3d(0, -4vh, 0) rotate(0); }
+  50% { transform: translate3d(var(--dx, 0), 50vh, 0) rotate(180deg); }
+  100% { transform: translate3d(0, 104vh, 0) rotate(360deg); }
+}
+@keyframes tema-volar {
+  0% { transform: translate3d(-60px, 0, 0); }
+  50% { transform: translate3d(50vw, -18px, 0); }
+  100% { transform: translate3d(calc(100vw + 60px), 0, 0); }
+}
+@keyframes tema-brillo { from { transform: translateX(-130%) skewX(-20deg); } to { transform: translateX(260%) skewX(-20deg); } }
+@keyframes tema-asoma { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes tema-flotar { 0%, 100% { transform: translateY(0) rotate(-4deg); } 50% { transform: translateY(-4px) rotate(4deg); } }
+/* Duración y retraso van en línea; el nombre aquí para que Tailwind no
+   descarte las @keyframes por "no usadas". */
+.tema-p-caer { animation: tema-caer 14s linear infinite; }
+.tema-p-volar { animation: tema-volar 20s linear infinite; }
+.tema-asoma { animation: tema-asoma .5s ease both; }
+
+/* Encabezado y pestañas: el oscuro de Cabane se tiñe con el color de la época
+   y una guirnalda fina corre por el borde inferior de la barra. */
+html[data-tema] .tema-header {
+  background: linear-gradient(100deg, var(--cb-dark) 30%, color-mix(in srgb, var(--tema-acento) 38%, var(--cb-dark))) !important;
+}
+html[data-tema] .tema-nav {
+  position: relative;
+  background: linear-gradient(100deg, var(--cb-dark) 30%, color-mix(in srgb, var(--tema-acento) 30%, var(--cb-dark))) !important;
+  padding-bottom: calc(10px + var(--tema-guirnalda-h) * 0.55) !important;
+}
+html[data-tema] .tema-nav::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--tema-guirnalda-h) * 0.62);
+  background: var(--tema-guirnalda) repeat-x 0 -2px / var(--tema-guirnalda-w) var(--tema-guirnalda-h);
+  pointer-events: none;
+}
+html[data-tema] .cb-pills-indicator {
+  background: linear-gradient(135deg, var(--tema-acento), color-mix(in srgb, var(--tema-acento) 60%, #000));
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--tema-acento) 45%, transparent);
+}
+html[data-tema] .tema-avatar { background: linear-gradient(135deg, var(--tema-acento), color-mix(in srgb, var(--tema-acento) 45%, #000)) !important; }
+
+/* Botones principales (los vino de Cabane) toman el color de la época, con
+   un brillo que pasa cada tanto. Se reconocen por su color en línea. */
+html[data-tema] button:not(:disabled):is([style*="background: rgb(122, 30, 58)"], [style*="background: linear-gradient(135deg, rgb(122, 30, 58)"], .tema-btn) {
+  position: relative; overflow: hidden;
+  background: linear-gradient(135deg, var(--tema-acento), color-mix(in srgb, var(--tema-acento) 58%, #000)) !important;
+  border-color: transparent !important;
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--tema-acento) 38%, transparent) !important;
+}
+html[data-tema] button:not(:disabled):is([style*="background: rgb(122, 30, 58)"], [style*="background: linear-gradient(135deg, rgb(122, 30, 58)"], .tema-btn)::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.26), transparent);
+  animation: tema-brillo 3.8s ease-in-out infinite; pointer-events: none;
+}
+
+/* Franja de temporada (TemaHero). */
+.tema-hero {
+  position: relative; overflow: hidden; isolation: isolate;
+  display: flex; align-items: center; gap: 14px;
+  margin-bottom: 16px; padding: calc(var(--tema-guirnalda-h) * 0.55 + 10px) 46px 14px 16px; border-radius: 18px;
+  color: #fff; font-family: 'Nunito', system-ui, sans-serif;
+  background:
+    radial-gradient(120% 140% at 100% 0%, rgba(255, 255, 255, 0.16), transparent 55%),
+    linear-gradient(120deg, var(--tema-acento), color-mix(in srgb, var(--tema-acento) 50%, var(--cb-dark)));
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--tema-acento) 30%, transparent);
+}
+.tema-hero-guirnalda {
+  position: absolute; left: 0; right: 0; top: -2px; height: calc(var(--tema-guirnalda-h) * 0.62); z-index: 1;
+  background: var(--tema-guirnalda) repeat-x 0 0 / var(--tema-guirnalda-w) var(--tema-guirnalda-h);
+}
+.tema-hero .tema-particulas { z-index: 0; opacity: .7; }
+.tema-hero-icono {
+  position: relative; z-index: 1; flex-shrink: 0; display: grid; place-items: center;
+  width: 62px; height: 62px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16); border: 1px solid rgba(255, 255, 255, 0.28);
+  animation: tema-flotar 3.6s ease-in-out infinite;
+}
+.tema-hero-texto { position: relative; z-index: 1; display: grid; gap: 2px; min-width: 0; }
+.tema-hero-texto strong { font-size: 18px; font-weight: 900; letter-spacing: -0.01em; line-height: 1.15; }
+.tema-hero-texto span { font-size: 13px; font-weight: 700; opacity: .88; }
+.tema-hero-cerrar {
+  position: absolute; z-index: 2; top: 50%; right: 10px; transform: translateY(-50%);
+  width: 30px; height: 30px; border-radius: 50%; border: none; cursor: pointer;
+  background: rgba(255, 255, 255, 0.16); color: #fff; font: 800 18px/1 'Nunito', sans-serif;
+}
+.tema-hero[data-compacto] { padding-top: calc(var(--tema-guirnalda-h) * 0.5 + 6px); padding-bottom: 8px; margin-bottom: 12px; }
+.tema-hero[data-compacto] .tema-hero-icono { width: 44px; height: 44px; }
+.tema-hero[data-compacto] .tema-hero-texto strong { font-size: 15px; }
+
+/* Adornos que cuelgan de la guirnalda de la franja y se mecen. */
+@keyframes tema-mecer { 0%, 100% { transform: rotate(-5deg); } 50% { transform: rotate(5deg); } }
+.tema-hero-colgantes { position: absolute; z-index: 1; top: 0; right: 58px; display: flex; gap: 26px; align-items: flex-start; pointer-events: none; }
+.tema-colgante { display: flex; flex-direction: column; align-items: center; transform-origin: 50% 0; animation: tema-mecer 3.8s ease-in-out infinite; }
+.tema-colgante::before { content: ""; width: 1px; height: var(--hilo); background: var(--hilo-color); opacity: .8; }
+.tema-colgante img { height: auto; filter: drop-shadow(0 3px 3px rgba(0, 0, 0, 0.25)); }
+.tema-hero-esquina { position: absolute; z-index: 0; top: 0; right: 0; width: 78px; height: 78px; transform: scaleX(-1); opacity: .9; pointer-events: none; }
+.tema-hero[data-compacto] .tema-hero-esquina { width: 58px; height: 58px; }
+@media (max-width: 560px) {
+  .tema-hero { padding-right: 96px; }
+  .tema-hero-colgantes { right: 46px; gap: 14px; }
+  .tema-colgante:nth-child(n+2) { display: none; }
+}
+
+/* Papel tapiz: los motivos de la época, muy suaves, detrás de toda la app. */
+html[data-tema] .tema-fondo { position: relative; isolation: isolate; }
+html[data-tema] .tema-fondo::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: var(--tema-patron) 0 0 / 180px 180px repeat; opacity: .07;
+}
+html[data-tema] .kds-dark::before { opacity: 0; }
+
+/* Mesas y comandas: el ícono de la época como marca de agua en la esquina,
+   detrás del contenido (no tapa números ni estados). */
+html[data-tema] .mesa-card { isolation: isolate; }
+html[data-tema] .tema-card { isolation: isolate; position: relative; }
+html[data-tema] .mesa-card:not(.is-free)::before, html[data-tema] .tema-card::before {
+  content: ""; position: absolute; z-index: -1; right: 4px; bottom: 4px; width: 64px; height: 64px;
+  background: var(--tema-icono) center / contain no-repeat; opacity: .14; transform: rotate(-12deg);
+  pointer-events: none;
+}
+html[data-tema] .mesa-card.is-free { background-image: linear-gradient(135deg, color-mix(in srgb, var(--tema-acento) 7%, transparent), transparent 60%) !important; }
+
+/* Ventanas (pedido, cobro, comprobante): guirnalda en el borde superior. */
+html[data-tema] .cb-sheet::before {
+  content: ""; position: absolute; left: 0; right: 0; top: -2px; height: calc(var(--tema-guirnalda-h) * 0.5); z-index: 3;
+  background: var(--tema-guirnalda) repeat-x 0 0 / calc(var(--tema-guirnalda-w) * 0.8) calc(var(--tema-guirnalda-h) * 0.8);
+  pointer-events: none;
+}
+html[data-tema] .cb-sheet-head { padding-top: calc(var(--tema-guirnalda-h) * 0.45 + 8px); }
+html[data-tema] .cb-sheet-grabber { background: var(--tema-acento); opacity: .5; }
+
+/* Listas vacías: el ícono de la época arriba del texto. */
+html[data-tema] .kds-empty::before {
+  content: ""; display: block; width: 40px; height: 40px; margin: 0 auto 8px;
+  background: var(--tema-icono) center / contain no-repeat;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tema-particulas { display: none; }
+  html[data-tema] button::after { animation: none !important; display: none; }
+  .tema-hero-icono { animation: none; }
+}

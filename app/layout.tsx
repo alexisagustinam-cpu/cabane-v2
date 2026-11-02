@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { TemaProvider } from "./tema/tema";
 
 export const metadata: Metadata = {
   title: "Cabane Sandwiches · Sistema de Pedidos",
@@ -21,7 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="apple-mobile-web-app-title" content="Cabane" />
       </head>
       <body suppressHydrationWarning style={{ margin: 0, background: "#EDE0CE", fontFamily: "'Nunito', system-ui, sans-serif" }}>
-        {children}
+        <TemaProvider>{children}</TemaProvider>
       </body>
     </html>
   );

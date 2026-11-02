@@ -13,6 +13,8 @@ export interface ReceiptData {
   total: number;
   payments: { method: string; amount: number }[];
   paid: boolean;
+  /** Tema por época vigente (lo manda el CRM): ícono y saludo al pie. */
+  tema?: { greeting: string; icon: string; accent: string } | null;
 }
 
 const W = 576, PAD = 36;
@@ -43,6 +45,7 @@ function wrap(ctx: CanvasRenderingContext2D, text: string, max: number): string[
 export async function renderReceiptCanvas(d: ReceiptData): Promise<HTMLCanvasElement> {
   try { await document.fonts?.load("900 30px Nunito"); await document.fonts?.load("700 22px Nunito"); } catch { /* usa la fuente del sistema */ }
   const logo = await loadImage("/logo.jpg");
+  const temaIcon = d.tema ? await loadImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(d.tema.icon)}`) : null;
   const font = (w: number, s: number) => `${w} ${s}px Nunito, system-ui, sans-serif`;
 
   // Primer pase para medir el alto; segundo pase dibuja.
@@ -82,6 +85,13 @@ export async function renderReceiptCanvas(d: ReceiptData): Promise<HTMLCanvasEle
     y += 40;
     text(d.paid ? "PAGADO" : paidSum > 0 ? `Falta por pagar ${money(d.total - paidSum)}` : "Pendiente de pago", PAD, 24, 900, d.paid ? GREEN : GOLD);
     y += 26; dashed();
+    // Detalle de la época: ícono y saludo, en el color del tema.
+    if (d.tema) {
+      y += 6;
+      if (temaIcon) { if (paint) ctx.drawImage(temaIcon, (W - 64) / 2, y, 64, 64 * (temaIcon.height / temaIcon.width || 1)); y += 74; }
+      y += 22; text(d.tema.greeting, W / 2, 28, 900, d.tema.accent, "center");
+      y += 14;
+    }
     y += 10; text("¡Gracias por su visita!", W / 2, 24, 800, WINE, "center");
     y += 30; text("Comprobante interno de consumo — no es factura", W / 2, 17, 700, MUTED, "center");
     return y + PAD;

@@ -14,6 +14,7 @@ import { ColumnChart, ShareBar, StatTile, CATEGORICAL, SERIES } from "./ui/chart
 import { Switch } from "./ui/Switch";
 import { summarize, seriesBy, fmtMin, GREEN_MAX, ORANGE_MAX, FORGOTTEN_MIN, type PrepRow } from "./ui/prep-times";
 import { DEMO_READY_EVENT, demoDeleteOrders, isDemoEnabled, resetDemo, setDemoEnabled } from "./ui/demo-store";
+import { TemaHero, TemaIcon, TemaParticles, temaBurst, useTema } from "./tema/tema";
 import { IconTrash, IconSound, IconReceipt, IconRefresh, IconBell, IconBack, IconSearch, IconInfo, IconChart, IconList, IconWallet, IconTag, IconNote, IconBox, IconFlame, IconUsers, IconSettings, IconDownload, IconCheck, IconPlus, IconMinus, IconLogout, IconClock, IconSun, IconShare, IconCup, IconGrid, IconMove, IconSplit, IconClose, IconSwap, IconMoon } from "./ui/icons";
 
 let _db: ReturnType<typeof createClient> | null = null;
@@ -264,6 +265,7 @@ input,select,textarea{min-width:0;max-width:100%;box-sizing:border-box}
 `;
 
 export default function App() {
+  const tema = useTema();
   const [ok, setOk] = useState(false);
   const [session, setSession] = useState<Session|null>(null);
   const [profile, setProfile] = useState<Profile|null>(null);
@@ -1619,6 +1621,7 @@ export default function App() {
       done();
       haptic(20);
       toast(`Pedido ${r.order.order_number?`#${r.order.order_number} `:""}enviado — ${q.mesa}${q.customerName?` · ${q.customerName}`:""}`);
+      if (tema) temaBurst(tema);
       loadWaiterOrders();
     } else if (r.network) {
       enqueueOrder(q); done();
@@ -1698,7 +1701,9 @@ export default function App() {
     const updated = (order.order_items||[]).map(i=>i.id===item.id?{...i,item_status:next}:i);
     const allDone = updated.filter(i=>i.station===station).every(i=>i.item_status==="listo");
     if (allDone) {
-      await exitCard(kitchenListRef.current?.querySelector(`[data-flip-id="${order.id}"]`) ?? null);
+      const card = kitchenListRef.current?.querySelector(`[data-flip-id="${order.id}"]`) ?? null;
+      if (tema) temaBurst(tema, card);
+      await exitCard(card);
       toast(`${order.table_label}${order.customer_name?` · ${order.customer_name}`:""}: ${station==="bar"?"barra":"cocina"} lista`);
     }
     flipKitchen();
@@ -1719,7 +1724,9 @@ export default function App() {
     }
     // Un pedido terminado sale de la lista con animación y el resto se reacomoda.
     if (status==="listo") {
-      await exitCard(kitchenListRef.current?.querySelector(`[data-flip-id="${orderId}"]`) ?? null);
+      const card = kitchenListRef.current?.querySelector(`[data-flip-id="${orderId}"]`) ?? null;
+      if (tema) temaBurst(tema, card);
+      await exitCard(card);
       toast("Pedido listo para entregar");
     }
     flipKitchen();
@@ -1864,6 +1871,7 @@ export default function App() {
       haptic(20);
       const methodName: Record<string,string> = { efectivo:"efectivo", tarjeta:"tarjeta", transferencia:"transferencia" };
       toast(`Cobrado ${$(parts.reduce((s,p)=>s+p.amount,0))} · ${parts.map(p=>methodName[p.method]||p.method).join(" + ")}`);
+      if (tema) temaBurst(tema);
       setCOrders((prev:Order[])=>prev.map(o=>o.id===orderId?{...o,payment_status:"paid"}:o));
       setCPayBreakdown((prev:{efectivo:number;tarjeta:number;transferencia:number})=>{
         const next = {...prev};
@@ -1893,6 +1901,7 @@ export default function App() {
       date: new Date(order.created_at), total: order.total, paid: order.payment_status==="paid",
       lines: (order.order_items||[]).map(i=>({ qty:i.quantity, name:i.product_name, amount:i.quantity*i.unit_price })),
       payments: pays.map(p=>({ method:p.method, amount:p.amount })),
+      tema: tema ? { greeting: tema.banner, icon: tema.decor.icon, accent: tema.colors.accent } : null,
     };
   }
 
@@ -2288,6 +2297,10 @@ export default function App() {
       <div style={{position:"absolute",top:"10%",left:"50%",transform:"translateX(-50%)",width:"70%",height:"50%",background:`radial-gradient(ellipse, rgba(122,30,58,0.25) 0%, transparent 70%)`,pointerEvents:"none"}}/>
       <div style={{position:"absolute",bottom:"-10%",right:"-10%",width:"50%",height:"50%",background:`radial-gradient(ellipse, rgba(181,137,74,0.1) 0%, transparent 70%)`,pointerEvents:"none"}}/>
       <div style={{position:"absolute",top:"50%",left:"-15%",width:"40%",height:"40%",background:`radial-gradient(ellipse, rgba(122,30,58,0.12) 0%, transparent 70%)`,pointerEvents:"none"}}/>
+      {tema && <>
+        <div style={{position:"absolute",top:"5%",left:"50%",transform:"translateX(-50%)",width:"80%",height:"55%",background:`radial-gradient(ellipse, ${tema.colors.accent}38 0%, transparent 70%)`,pointerEvents:"none"}}/>
+        <TemaParticles tema={tema} />
+      </>}
 
       <div style={{width:"100%",maxWidth:380,position:"relative",zIndex:1,animation:"fadeUp .5s ease both"}}>
 
@@ -2299,7 +2312,7 @@ export default function App() {
             borderRadius:28,
             background:`linear-gradient(145deg, rgba(122,30,58,0.5), rgba(181,137,74,0.2))`,
             border:"1px solid rgba(181,137,74,0.25)",
-            boxShadow:"0 20px 60px rgba(0,0,0,0.5), 0 0 40px rgba(122,30,58,0.3)",
+            boxShadow:tema?`0 20px 60px rgba(0,0,0,0.5), 0 0 48px ${tema.colors.accent}66`:"0 20px 60px rgba(0,0,0,0.5), 0 0 40px rgba(122,30,58,0.3)",
             marginBottom:24,
           }}>
             <img
@@ -2311,6 +2324,12 @@ export default function App() {
           </div>
           <div style={{height:1,background:"linear-gradient(90deg, transparent, rgba(181,137,74,0.4), transparent)",marginBottom:20}}/>
           <p style={{color:"rgba(232,213,183,0.4)",fontSize:11,fontWeight:700,letterSpacing:"0.3em",textTransform:"uppercase" as const}}>Sistema de pedidos</p>
+          {tema && (
+            <div className="tema-asoma" style={{marginTop:16,display:"inline-flex",alignItems:"center",gap:10,padding:"8px 16px 8px 8px",borderRadius:99,background:`linear-gradient(120deg, ${tema.colors.accent}55, rgba(255,255,255,0.04))`,border:`1px solid ${tema.colors.accent}88`,color:"#F3E6D3",textAlign:"left" as const}}>
+              <TemaIcon tema={tema} size={30}/>
+              <span style={{display:"grid"}}><strong style={{fontSize:14,fontWeight:900}}>{tema.staffGreeting}</strong>{tema.countdown && <span style={{fontSize:12,fontWeight:700,opacity:.8}}>{tema.countdown}</span>}</span>
+            </div>
+          )}
         </div>
 
         {/* Form */}
@@ -2337,7 +2356,7 @@ export default function App() {
               {loginErr}
             </div>
           )}
-          <button disabled={loginLoading||!email||!pass} onClick={login} style={{
+          <button className="tema-btn" disabled={loginLoading||!email||!pass} onClick={login} style={{
             width:"100%",height:52,borderRadius:14,fontSize:15,fontWeight:800,fontFamily:FONT,border:"none",cursor:loginLoading||!email||!pass?"not-allowed":"pointer",
             background:loginLoading||!email||!pass?"rgba(122,30,58,0.3)":`linear-gradient(135deg, ${RED}, #5C142C)`,
             color:loginLoading||!email||!pass?"rgba(255,255,255,0.3)":"#E8D5B7",
@@ -2355,7 +2374,7 @@ export default function App() {
   // ── APP SHELL ───────────────────────────────────────────────────
   const SCREEN_ICONS: Record<string, ReactNode> = { waiter:<IconGrid size={17}/>, kitchen:<IconFlame size={17}/>, bar:<IconCup size={17}/>, cashier:<IconWallet size={17}/>, admin:<IconChart size={17}/> };
   return (
-    <div style={{minHeight:"100dvh",background:CREAM,display:"flex",flexDirection:"column",fontFamily:FONT}}>
+    <div className="tema-fondo" style={{minHeight:"100dvh",background:CREAM,display:"flex",flexDirection:"column",fontFamily:FONT}}>
       {offlineBanner}
       <Toaster/>
       {safeMode && (
@@ -2369,18 +2388,19 @@ export default function App() {
       )}
 
       {/* Top bar */}
-      <header style={{background:DARK,padding:"0 12px 0 16px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,position:"sticky",top:0,zIndex:100,boxShadow:`0 2px 12px rgba(23,18,15,0.3)`}}>
+      <header className="tema-header" style={{background:DARK,padding:"0 12px 0 16px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,position:"sticky",top:0,zIndex:100,boxShadow:`0 2px 12px rgba(23,18,15,0.3)`}}>
         <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}>
           <img src="/logo.jpg" alt="Cabane" onError={(e)=>{(e.currentTarget as HTMLImageElement).style.display="none"}}
             style={{width:34,height:34,borderRadius:9,objectFit:"contain" as const,background:DARK,flexShrink:0}}/>
           <span style={{fontWeight:900,fontSize:16,color:"#fff",letterSpacing:"-0.01em",whiteSpace:"nowrap" as const}}><span style={{color:"#E8D5B7"}}>CABANE</span> <span className="hide-xs" style={{color:"rgba(255,255,255,0.5)",fontWeight:600,fontSize:13}}>Sandwiches</span></span>
+          {tema && <span title={tema.staffGreeting} style={{display:"inline-flex",flexShrink:0,animation:"tema-flotar 3.6s ease-in-out infinite"}}><TemaIcon tema={tema} size={26}/></span>}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}>
           <div style={{textAlign:"right" as const,minWidth:0}}>
             <div style={{fontSize:13,fontWeight:800,color:"#fff",whiteSpace:"nowrap" as const,overflow:"hidden",textOverflow:"ellipsis",maxWidth:160}}>{profile.name}</div>
             <div className="hide-sm" style={{fontSize:11,fontWeight:600,color:"rgba(255,255,255,0.4)",textTransform:"uppercase" as const,letterSpacing:"0.06em"}}>{profile.roles.map(r=>SL[r]||r).join(" · ")}</div>
           </div>
-          <span aria-hidden="true" style={{width:34,height:34,borderRadius:"50%",background:`linear-gradient(135deg, ${RED}, #4A1022)`,color:"#F3E6D3",display:"inline-flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:14,flexShrink:0}}>
+          <span aria-hidden="true" className="tema-avatar" style={{width:34,height:34,borderRadius:"50%",background:`linear-gradient(135deg, ${RED}, #4A1022)`,color:"#F3E6D3",display:"inline-flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:14,flexShrink:0}}>
             {(profile.name||"?").trim().charAt(0).toUpperCase()}
           </span>
           <button onClick={()=>askConfirm("¿Cerrar sesión en este dispositivo?", logout)} aria-label="Salir" title="Salir"
@@ -2392,7 +2412,7 @@ export default function App() {
 
       {/* Pantallas por rol — una sola línea, se desliza si no entra */}
       {screens.length>1 && (
-        <nav style={{background:DARK,padding:"2px 10px 10px"}}>
+        <nav className="tema-nav" style={{background:DARK,padding:"2px 10px 10px"}}>
           <NavPills tone="dark" stretch ariaLabel="Pantallas" active={screen}
             onChange={s=>{ haptic(); goTo(s); }}
             items={screens.map(s=>({key:s,label:SL[s],icon:SCREEN_ICONS[s]}))}/>
@@ -2404,6 +2424,7 @@ export default function App() {
       {/* ── MESERO · MAPA DE MESAS ─────────────────────────────── */}
       {screen==="waiter" && waiterView==="map" && (
         <div style={{flex:1,padding:16,maxWidth:1200,margin:"0 auto",width:"100%"}}>
+          {tema && <TemaHero tema={tema}/>}
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap" as const,gap:10}}>
             <div>
               <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK,lineHeight:1.1}}>Mesas</h1>
@@ -2742,6 +2763,7 @@ export default function App() {
         // Tablero de cocina/barra: usa todo el ancho de la pantalla (sin márgenes laterales)
         // para que entren más pedidos a la vista sin tener que bajar.
         <div className={`kds-page${kdsDark?" kds-dark":""}`} style={{padding:16,width:"100%",flex:1,background:K.bg,transition:"background-color .25s"}}>
+          {tema && <TemaHero tema={tema} compact/>}
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap" as const,gap:10}}>
             <div>
               <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:K.ink,lineHeight:1.1}}>{stationLabel}</h1>
@@ -2856,8 +2878,9 @@ export default function App() {
             </div>
           ) : kOrders.length===0&&!kLoading ? (
             <div style={{textAlign:"center" as const,padding:"60px 20px"}}>
+              {tema && <div className="tema-asoma" style={{marginBottom:12,display:"inline-block",animation:"tema-flotar 3.6s ease-in-out infinite"}}><TemaIcon tema={tema} size={64}/></div>}
               <p style={{fontWeight:800,fontSize:20,color:K.muted}}>Sin pedidos activos</p>
-              <p style={{fontSize:14,color:K.muted,marginTop:4}}>Los nuevos pedidos aparecerán aquí</p>
+              <p style={{fontSize:14,color:K.muted,marginTop:4}}>{tema ? tema.emptyLine : "Los nuevos pedidos aparecerán aquí"}</p>
             </div>
           ) : (()=>{
             const renderCard = (o: Order) => {
@@ -2868,7 +2891,7 @@ export default function App() {
                 const stationStatus: OrderItem["item_status"] = stationItems.some(i=>i.item_status==="preparando") ? "preparando" : "enviado";
                 const stationBusy = updating===o.id;
                 return (
-                  <div key={o.id} data-flip-id={o.id} style={{...kcard,padding:16,
+                  <div key={o.id} data-flip-id={o.id} className="tema-card" style={{...kcard,padding:16,
                     // Bordes por lado: mezclar `border` con `borderLeft` hace que React pierda el color al cambiar de estado.
                     border:"none",
                     borderTop:stationStatus==="enviado"?`2px solid ${RED}`:`1px solid ${K.border}`,
@@ -2967,6 +2990,7 @@ export default function App() {
         <div style={{padding:16,maxWidth:1200,margin:"0 auto",width:"100%"}}>
           <style>{`.cashier-grid{display:block}.cashier-sidebar{display:none}@media(min-width:900px){.cashier-grid{display:grid!important;grid-template-columns:1fr 340px;gap:20px;align-items:start}.cashier-sidebar{display:flex!important}}`}</style>
 
+          {tema && <TemaHero tema={tema}/>}
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20,flexWrap:"wrap" as const,gap:10}}>
             <div>
               <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK,lineHeight:1.1}}>Caja</h1>
@@ -3054,7 +3078,9 @@ export default function App() {
                 </div>
               ) : cOrders.filter(o=>o.payment_status==="pending"&&o.status!=="cancelado").length===0&&!cLoading ? (
                 <div style={{textAlign:"center" as const,padding:"60px 20px"}}>
+                  {tema && <div className="tema-asoma" style={{marginBottom:12,display:"inline-block",animation:"tema-flotar 3.6s ease-in-out infinite"}}><TemaIcon tema={tema} size={64}/></div>}
                   <p style={{fontWeight:800,fontSize:20,color:MUTED}}>Sin pedidos pendientes</p>
+                  {tema && <p style={{fontSize:14,color:MUTED,marginTop:4}}>{tema.emptyLine}</p>}
                 </div>
               ) : (
                 <div style={{display:"flex",flexDirection:"column",gap:12}}>
@@ -3122,6 +3148,7 @@ export default function App() {
       {/* ── ADMIN ──────────────────────────────────────────────── */}
       {screen==="admin" && (
         <div style={{padding:16,maxWidth:1200,margin:"0 auto",width:"100%"}}>
+          {tema && <TemaHero tema={tema} compact/>}
           <h1 style={{fontSize:"clamp(26px,4vw,36px)",fontWeight:900,letterSpacing:"-0.02em",color:DARK,lineHeight:1.1,marginBottom:12}}>Administración</h1>
           {/* Secciones: una sola línea tipo carrusel, fija arriba al hacer scroll */}
           <div style={{position:"sticky" as const,top:56,zIndex:20,margin:"0 -16px 18px",padding:"8px 16px",background:"rgba(237,224,206,0.94)",WebkitBackdropFilter:"blur(10px)",backdropFilter:"blur(10px)",borderBottom:`1px solid rgba(196,168,130,0.45)`}}>

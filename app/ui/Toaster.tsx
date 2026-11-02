@@ -4,6 +4,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { gsap, prefersReducedMotion } from "./motion";
 import { IconCheck, IconInfo, IconClose } from "./icons";
+import { TemaIcon, useTema } from "../tema/tema";
 
 export type ToastKind = "success" | "error" | "info" | "safe";
 export type ToastAction = { label: string; onClick: () => void };
@@ -44,11 +45,15 @@ function ToastItem({ t, onDone }: { t: Toast; onDone: (id: number) => void }) {
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  const tema = useTema();
   const c = COLORS[t.kind];
   const Icon = t.kind === "success" ? IconCheck : t.kind === "error" ? IconClose : IconInfo;
+  // Con tema por época, los avisos de éxito llevan su ícono y una franja del color.
+  const themed = tema && t.kind === "success";
   return (
-    <div ref={ref} role={t.kind === "error" ? "alert" : "status"} onClick={leave} className="cb-toast" style={{ background: c.bg, color: c.fg }}>
-      <Icon size={18} strokeWidth={2.5} />
+    <div ref={ref} role={t.kind === "error" ? "alert" : "status"} onClick={leave} className="cb-toast"
+      style={{ background: themed ? `linear-gradient(120deg, ${c.bg} 55%, ${tema.colors.accent})` : c.bg, color: c.fg }}>
+      {themed ? <TemaIcon tema={tema} size={24} /> : <Icon size={18} strokeWidth={2.5} />}
       <span style={{ flex: 1 }}>{t.msg}</span>
       {t.action && (
         <button type="button" className="cb-toast-action"
